@@ -73,3 +73,28 @@ except OSError:
 @app.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/config", tags=["meta"])
+async def health_config() -> dict[str, object]:
+    """Что backend видит в окружении. Значений секретов НЕ возвращает —
+    только факт наличия и длину, чтобы ловить пустые/обрезанные переменные."""
+
+    def probe(value: str, default: str = "") -> dict[str, object]:
+        return {
+            "set": bool(value) and value != default,
+            "length": len(value or ""),
+            # Пробелы/переводы строк по краям — частая причина «токен не работает».
+            "has_surrounding_whitespace": value != value.strip() if value else False,
+        }
+
+    return {
+        "discord_bot_token": probe(settings.discord_bot_token),
+        "internal_api_key": probe(settings.internal_api_key, "dev-internal-key-change-me"),
+        "master_password": probe(settings.master_password, "changeme"),
+        "secret_key": probe(settings.secret_key, "dev-secret-change-me"),
+        "upload_dir": settings.upload_dir,
+        "cors_origins": settings.cors_origins,
+        # Хост БД без пароля — чтобы видеть, к какому серверу подключились.
+        "database_host": settings.database_url.rsplit("@", 1)[-1],
+    }

@@ -29,9 +29,18 @@ class DiscordError(Exception):
 
 
 def _headers() -> dict[str, str]:
-    token = get_settings().discord_bot_token
+    raw = get_settings().discord_bot_token
+    token = (raw or "").strip()
     if not token:
-        raise DiscordError("DISCORD_BOT_TOKEN не задан в настройках backend")
+        raise DiscordError(
+            "DISCORD_BOT_TOKEN пуст в окружении backend-контейнера. "
+            "Переменная должна быть объявлена в блоке environment сервиса backend "
+            "(не только в переменных стека). Проверьте: GET /health/config"
+        )
+    # Токен часто вставляют с кавычками или префиксом — Discord вернёт 401.
+    if token.startswith(("Bot ", "Bearer ")):
+        token = token.split(" ", 1)[1]
+    token = token.strip("\"'")
     return {"Authorization": f"Bot {token}"}
 
 
