@@ -1,0 +1,55 @@
+# Локальная сборка Gambit Dashboard (docker compose up --build).
+# Для Portainer с готовыми образами из GHCR см. docker-compose.portainer.yml.
+# Секреты задаются через .env рядом с этим файлом (см. .env.example).
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gambit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gambit}
+      POSTGRES_DB: ${POSTGRES_DB:-gambit}
+    volumes:
+      - gambit_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gambit}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gambit}:${POSTGRES_PASSWORD:-gambit}@db:5432/${POSTGRES_DB:-gambit}
+      MASTER_PASSWORD: ${MASTER_PASSWORD:-changeme}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:8080"]}'
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+
+  bot:
+    build: ./bot
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      API_BASE: http://backend:8000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+      BOT_POLL_SECONDS: ${BOT_POLL_SECONDS:-15}
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+
+volumes:
+  gambit_pgdata:
