@@ -135,6 +135,9 @@ class ProjectEntity(Base):
         ForeignKey("entity.id", ondelete="CASCADE"), unique=True
     )
     player_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)  # Discord user id
+    # Кэш профиля из Discord, чтобы показывать игрока не голым ID.
+    player_name: Mapped[str] = mapped_column(String(120), default="")
+    player_avatar_url: Mapped[str] = mapped_column(String(500), default="")
 
     entity: Mapped[Entity] = relationship(back_populates="assignment")
 
@@ -166,8 +169,11 @@ class Post(Base):
     # Идентичность вебхука + author эмбеда.
     author_name: Mapped[str] = mapped_column(String(200), default="")
     author_avatar_url: Mapped[str] = mapped_column(String(500), default="")
-    # Формат: content всегда шлётся как текст; при use_embed добавляется эмбед.
+    # Формат: content шлётся как текст сообщения; при use_embed добавляется эмбед
+    # со СВОИМИ заголовком и описанием (title — внутреннее имя верда для дашборда).
     use_embed: Mapped[bool] = mapped_column(default=False)
+    embed_title: Mapped[str] = mapped_column(String(300), default="")
+    embed_description: Mapped[str] = mapped_column(Text, default="")
     embed_image_url: Mapped[str] = mapped_column(String(500), default="")
     embed_color: Mapped[str] = mapped_column(String(20), default="")  # hex, напр. "#5865F2"
 

@@ -25,6 +25,12 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def fetch_attachment(self, url: str) -> bytes:
+        """Скачать вложение с backend (url вида /uploads/1/abc_file.png)."""
+        r = await self._client.get(url)
+        r.raise_for_status()
+        return r.content
+
     async def mark_delivered(self, post_id: int, message_id: int) -> None:
         r = await self._client.post(
             f"/internal/posts/{post_id}/delivered", json={"message_id": message_id}

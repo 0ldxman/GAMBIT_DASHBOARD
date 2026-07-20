@@ -6,9 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import logging
+
 from app.database import get_db
+from app.discord_api import DiscordError
+from app.discord_api import get_guild_member
 from app.models import Entity
 from app.models import EntityType
+from app.models import Project
 from app.models import ProjectEntity
 from app.routers.projects import get_project_or_404
 from app.schemas import AssignPlayerRequest
@@ -18,6 +23,8 @@ from app.schemas import EntityUpdate
 from app.schemas import TemplatePreviewResponse
 from app.security import require_master
 from app.templating import render_entity_template
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/projects/{project_id}/entities",
@@ -97,12 +104,38 @@ async def assign_player(
     body: AssignPlayerRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Entity:
-    """Закрепить сущность за игроком (Discord user id) или снять закрепление."""
+    """Закрепить сущность за игроком (Discord user id) или снять закрепление.
+
+    Имя и аватар подтягиваются из Discord и кэшируются, чтобы в интерфейсе
+    показывать игрока, а не голый снежинка-ID.
+    """
     entity = await get_entity_or_404(project_id, entity_id, db)
+
+    name, avatar = "", ""
+    if body.player_id is not None:
+        project = await db.get(Project, project_id)
+        if project is not None and project.guild_id:
+            try:
+                member = await get_guild_member(project.guild_id, body.player_id)
+                name, avatar = member["name"], member["avatar_url"]
+            except DiscordError:
+                # Профиль — необязательная роскошь: привязку всё равно сохраняем.
+                logger.warning("Не удалось получить профиль игрока %s", body.player_id)
+
     if entity.assignment is None:
-        db.add(ProjectEntity(project_id=project_id, entity_id=entity.id, player_id=body.player_id))
+        db.add(
+            ProjectEntity(
+                project_id=project_id,
+                entity_id=entity.id,
+                player_id=body.player_id,
+                player_name=name,
+                player_avatar_url=avatar,
+            )
+        )
     else:
         entity.assignment.player_id = body.player_id
+        entity.assignment.player_name = name
+        entity.assignment.player_avatar_url = avatar
     await db.commit()
     return await get_entity_or_404(project_id, entity_id, db)
 

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from app.fields import DiscordId
 from app.models import NotificationType
 from app.models import PostStatus
 from app.models import RegistrationStatus
@@ -32,7 +33,7 @@ class ProjectBase(BaseModel):
     label: str
     type: str = ""
     desc: str = ""
-    guild_id: Optional[int] = None
+    guild_id: Optional[DiscordId] = None
 
 
 class ProjectCreate(ProjectBase):
@@ -43,7 +44,7 @@ class ProjectUpdate(BaseModel):
     label: Optional[str] = None
     type: Optional[str] = None
     desc: Optional[str] = None
-    guild_id: Optional[int] = None
+    guild_id: Optional[DiscordId] = None
 
 
 class ProjectOut(ORMModel):
@@ -51,13 +52,13 @@ class ProjectOut(ORMModel):
     label: str
     type: str
     desc: str
-    guild_id: Optional[int]
+    guild_id: Optional[DiscordId]
     created_at: datetime
 
 
 # ---------- channel ----------
 class ChannelBase(BaseModel):
-    channel_id: int
+    channel_id: DiscordId
     channel_type: str = ""
     label: str = ""
 
@@ -67,7 +68,7 @@ class ChannelCreate(ChannelBase):
 
 
 class ChannelUpdate(BaseModel):
-    channel_id: Optional[int] = None
+    channel_id: Optional[DiscordId] = None
     channel_type: Optional[str] = None
     label: Optional[str] = None
 
@@ -75,7 +76,7 @@ class ChannelUpdate(BaseModel):
 class ChannelOut(ORMModel):
     id: int
     project_id: int
-    channel_id: int
+    channel_id: DiscordId
     channel_type: str
     label: str
 
@@ -128,7 +129,9 @@ class EntityUpdate(BaseModel):
 
 class AssignmentOut(ORMModel):
     id: int
-    player_id: Optional[int]
+    player_id: Optional[DiscordId]
+    player_name: str = ""
+    player_avatar_url: str = ""
 
 
 class EntityOut(ORMModel):
@@ -143,7 +146,22 @@ class EntityOut(ORMModel):
 
 
 class AssignPlayerRequest(BaseModel):
-    player_id: Optional[int] = None  # None снимает закрепление
+    player_id: Optional[DiscordId] = None  # None снимает закрепление
+
+
+# ---------- discord справочники ----------
+class DiscordChannelOut(BaseModel):
+    channel_id: str  # snowflake строкой
+    name: str
+    type: str
+    position: int
+    parent_name: Optional[str] = None
+
+
+class DiscordMemberOut(BaseModel):
+    player_id: str
+    name: str
+    avatar_url: str
 
 
 # ---------- template preview ----------
@@ -159,15 +177,39 @@ class TemplatePreviewResponse(BaseModel):
 
 
 # ---------- post (верд) ----------
+class EntityEditOp(BaseModel):
+    """Одна операция над атрибутом сущности.
+
+    mode:
+      set    — записать value как есть (число/строка/список/объект)
+      expr   — вычислить арифметику по атрибутам, напр. "ВС.людские_ресурсы - 10"
+      delete — удалить атрибут
+    """
+
+    path: str  # dot-path, напр. "ВС.людские_ресурсы"
+    mode: str = "set"
+    value: Any = None
+
+
 class EntityEdit(BaseModel):
     entity_id: int
-    attributes: dict[str, Any]
+    # Новый формат — список операций.
+    ops: list[EntityEditOp] = Field(default_factory=list)
+    # Прежний формат (плоский/вложенный патч) — поддерживается для старых вердов.
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class AttachmentOut(BaseModel):
+    url: str
+    filename: str
+    size: int
+    content_type: str
 
 
 class PostBase(BaseModel):
     title: str = ""
     channel_id: Optional[int] = None
-    target_channel_id: Optional[int] = None
+    target_channel_id: Optional[DiscordId] = None
     content: str = ""
     attachments: list[Any] = Field(default_factory=list)
     entity_edits: list[EntityEdit] = Field(default_factory=list)
@@ -177,6 +219,8 @@ class PostBase(BaseModel):
     author_name: str = ""
     author_avatar_url: str = ""
     use_embed: bool = False
+    embed_title: str = ""
+    embed_description: str = ""
     embed_image_url: str = ""
     embed_color: str = ""
 
@@ -188,7 +232,7 @@ class PostCreate(PostBase):
 class PostUpdate(BaseModel):
     title: Optional[str] = None
     channel_id: Optional[int] = None
-    target_channel_id: Optional[int] = None
+    target_channel_id: Optional[DiscordId] = None
     content: Optional[str] = None
     attachments: Optional[list[Any]] = None
     entity_edits: Optional[list[EntityEdit]] = None
@@ -198,6 +242,8 @@ class PostUpdate(BaseModel):
     author_name: Optional[str] = None
     author_avatar_url: Optional[str] = None
     use_embed: Optional[bool] = None
+    embed_title: Optional[str] = None
+    embed_description: Optional[str] = None
     embed_image_url: Optional[str] = None
     embed_color: Optional[str] = None
 
@@ -206,7 +252,7 @@ class PostOut(ORMModel):
     id: int
     project_id: int
     channel_id: Optional[int]
-    target_channel_id: Optional[int]
+    target_channel_id: Optional[DiscordId]
     title: str
     status: PostStatus
     content: str
@@ -215,7 +261,7 @@ class PostOut(ORMModel):
     reply_to: Optional[int]
     scheduled_at: Optional[datetime]
     published_at: Optional[datetime]
-    published_message_id: Optional[int]
+    published_message_id: Optional[DiscordId]
     created_by: str
     created_at: datetime
     updated_by: str
@@ -223,6 +269,8 @@ class PostOut(ORMModel):
     author_name: str
     author_avatar_url: str
     use_embed: bool
+    embed_title: str
+    embed_description: str
     embed_image_url: str
     embed_color: str
 
@@ -267,7 +315,7 @@ class RegistrationFormOut(ORMModel):
 # ---------- registration (заявка) ----------
 class RegistrationCreate(BaseModel):
     form_id: int
-    discord_user_id: int
+    discord_user_id: DiscordId
     discord_username: str = ""
     answers: dict[str, Any] = Field(default_factory=dict)
 
@@ -276,7 +324,7 @@ class RegistrationOut(ORMModel):
     id: int
     form_id: int
     project_id: int
-    discord_user_id: int
+    discord_user_id: DiscordId
     discord_username: str
     answers: dict[str, Any]
     status: RegistrationStatus
@@ -300,36 +348,36 @@ class NotificationOut(ORMModel):
     type: NotificationType
     message: str
     entity_id: Optional[int]
-    player_id: Optional[int]
-    discord_channel_id: Optional[int]
+    player_id: Optional[DiscordId]
+    discord_channel_id: Optional[DiscordId]
     is_read: bool
     created_at: datetime
 
 
 # ---------- internal (bot) ----------
 class WebhookIn(BaseModel):
-    discord_channel_id: int
-    webhook_id: int
+    discord_channel_id: DiscordId
+    webhook_id: DiscordId
     webhook_token: str
     webhook_url: str
     project_id: Optional[int] = None
 
 
 class WebhookOut(ORMModel):
-    discord_channel_id: int
-    webhook_id: int
+    discord_channel_id: DiscordId
+    webhook_id: DiscordId
     webhook_token: str
     webhook_url: str
 
 
 class DeliveredIn(BaseModel):
-    message_id: int
+    message_id: DiscordId
 
 
 class PingIn(BaseModel):
-    guild_id: int
-    player_id: int
-    discord_channel_id: Optional[int] = None
+    guild_id: DiscordId
+    player_id: DiscordId
+    discord_channel_id: Optional[DiscordId] = None
     message: str = ""
 
 
@@ -342,11 +390,14 @@ class MeInfoOut(BaseModel):
 class PendingPostOut(BaseModel):
     id: int
     project_id: int
-    target_channel_id: Optional[int]
+    target_channel_id: Optional[DiscordId]
     content: str
     title: str
     use_embed: bool
+    embed_title: str
+    embed_description: str
     embed_image_url: str
     embed_color: str
     author_name: str
     author_avatar_url: str
+    attachments: list[Any] = Field(default_factory=list)

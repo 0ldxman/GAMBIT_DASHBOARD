@@ -103,7 +103,7 @@ function GuildSetting({ project, onSaved }: { project: Project; onSaved: () => v
       return;
     }
     try {
-      await api.updateProject(project.id, { guild_id: value ? Number(value) : null });
+      await api.updateProject(project.id, { guild_id: value || null });
       setEditing(false);
       setErr(null);
       onSaved();

@@ -3,14 +3,14 @@ export interface Project {
   label: string;
   type: string;
   desc: string;
-  guild_id: number | null;
+  guild_id: string | null;
   created_at: string;
 }
 
 export interface Channel {
   id: number;
   project_id: number;
-  channel_id: number;
+  channel_id: string;
   channel_type: string;
   label: string;
 }
@@ -25,7 +25,25 @@ export interface EntityType {
 
 export interface Assignment {
   id: number;
-  player_id: number | null;
+  player_id: string | null;
+  player_name: string;
+  player_avatar_url: string;
+}
+
+/** Канал сервера Discord (справочник для выбора). */
+export interface DiscordChannel {
+  channel_id: string;
+  name: string;
+  type: string;
+  position: number;
+  parent_name: string | null;
+}
+
+/** Профиль участника сервера Discord. */
+export interface DiscordMember {
+  player_id: string;
+  name: string;
+  avatar_url: string;
 }
 
 export interface Entity {
@@ -41,25 +59,42 @@ export interface Entity {
 
 export type PostStatus = "draft" | "scheduled" | "published";
 
+/** Режим операции над атрибутом: записать / вычислить / удалить. */
+export type EditMode = "set" | "expr" | "delete";
+
+export interface EntityEditOp {
+  path: string;
+  mode: EditMode;
+  value: unknown;
+}
+
 export interface EntityEdit {
   entity_id: number;
-  attributes: Record<string, unknown>;
+  ops: EntityEditOp[];
+  attributes?: Record<string, unknown>;
+}
+
+export interface Attachment {
+  url: string;
+  filename: string;
+  size: number;
+  content_type: string;
 }
 
 export interface Post {
   id: number;
   project_id: number;
   channel_id: number | null;
-  target_channel_id: number | null;
+  target_channel_id: string | null;
   title: string;
   status: PostStatus;
   content: string;
-  attachments: unknown[];
+  attachments: Attachment[];
   entity_edits: EntityEdit[];
   reply_to: number | null;
   scheduled_at: string | null;
   published_at: string | null;
-  published_message_id: number | null;
+  published_message_id: string | null;
   created_by: string;
   created_at: string;
   updated_by: string;
@@ -67,6 +102,8 @@ export interface Post {
   author_name: string;
   author_avatar_url: string;
   use_embed: boolean;
+  embed_title: string;
+  embed_description: string;
   embed_image_url: string;
   embed_color: string;
 }
@@ -102,7 +139,7 @@ export interface Registration {
   id: number;
   form_id: number;
   project_id: number;
-  discord_user_id: number;
+  discord_user_id: string;
   discord_username: string;
   answers: Record<string, unknown>;
   status: RegistrationStatus;
@@ -120,8 +157,8 @@ export interface AppNotification {
   type: NotificationType;
   message: string;
   entity_id: number | null;
-  player_id: number | null;
-  discord_channel_id: number | null;
+  player_id: string | null;
+  discord_channel_id: string | null;
   is_read: boolean;
   created_at: string;
 }

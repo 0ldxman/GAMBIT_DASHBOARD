@@ -1,6 +1,9 @@
 import type {
   AppNotification,
+  Attachment,
   Channel,
+  DiscordChannel,
+  DiscordMember,
   Entity,
   EntityType,
   Post,
@@ -114,7 +117,7 @@ export const api = {
     request<Entity>("PATCH", `/projects/${pid}/entities/${eid}`, data),
   deleteEntity: (pid: number, eid: number) =>
     request<void>("DELETE", `/projects/${pid}/entities/${eid}`),
-  assignPlayer: (pid: number, eid: number, player_id: number | null) =>
+  assignPlayer: (pid: number, eid: number, player_id: string | null) =>
     request<Entity>("PUT", `/projects/${pid}/entities/${eid}/assignment`, {
       player_id,
     }),
@@ -127,6 +130,8 @@ export const api = {
       "GET",
       `/projects/${pid}/posts${status ? `?status=${status}` : ""}`,
     ),
+  getPost: (pid: number, postId: number) =>
+    request<Post>("GET", `/projects/${pid}/posts/${postId}`),
   createPost: (pid: number, data: Partial<Post>) =>
     request<Post>("POST", `/projects/${pid}/posts`, data),
   updatePost: (pid: number, postId: number, data: Partial<Post>) =>
@@ -140,6 +145,35 @@ export const api = {
       "POST",
       `/projects/${pid}/posts/${postId}/schedule?scheduled_at=${encodeURIComponent(scheduledAt)}`,
     ),
+
+  // вложения (multipart, поэтому мимо общего request())
+  uploadAttachment: async (pid: number, file: File): Promise<Attachment> => {
+    const form = new FormData();
+    form.append("file", file);
+    const token = getToken();
+    const res = await fetch(`/api/projects/${pid}/uploads`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const data = await res.json();
+        detail = typeof data.detail === "string" ? data.detail : detail;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, detail);
+    }
+    return (await res.json()) as Attachment;
+  },
+
+  // discord справочники
+  listDiscordChannels: (pid: number) =>
+    request<DiscordChannel[]>("GET", `/projects/${pid}/discord/channels`),
+  getDiscordMember: (pid: number, userId: string) =>
+    request<DiscordMember>("GET", `/projects/${pid}/discord/members/${userId}`),
 
   // forms (регистрационные формы)
   listForms: (pid: number) =>

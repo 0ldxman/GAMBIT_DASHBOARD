@@ -2,30 +2,54 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
-import type { Entity, EntityType, TemplatePreview } from "../types";
+import { PlayerBadge } from "../components/PlayerBadge";
+import type { DiscordMember, Entity, EntityType, TemplatePreview } from "../types";
 
 interface AttrRow {
   key: string;
   value: string;
 }
 
-function attrsToRows(attrs: Record<string, unknown>): AttrRow[] {
-  return Object.entries(attrs).map(([key, value]) => ({
-    key,
-    value: typeof value === "string" ? value : JSON.stringify(value),
-  }));
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Вложенный объект → строки с dot-path ключами: {ВС:{танки:1}} → "ВС.танки". */
+function flatten(obj: Record<string, unknown>, prefix = ""): AttrRow[] {
+  const rows: AttrRow[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (isPlainObject(value) && Object.keys(value).length > 0) {
+      rows.push(...flatten(value, path));
+    } else {
+      rows.push({
+        key: path,
+        value: typeof value === "string" ? value : JSON.stringify(value),
+      });
+    }
+  }
+  return rows;
 }
 
-function rowsToAttrs(rows: AttrRow[]): Record<string, unknown> {
+/** Строки с dot-path ключами → вложенный объект. */
+function unflatten(rows: AttrRow[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const { key, value } of rows) {
-    if (!key.trim()) continue;
-    // число/булево/массив — как JSON, иначе строка.
+    const path = key.trim();
+    if (!path) continue;
+    // Числа/булевы/массивы разбираем как JSON, остальное — строка.
+    let parsed: unknown;
     try {
-      out[key] = JSON.parse(value);
+      parsed = JSON.parse(value);
     } catch {
-      out[key] = value;
+      parsed = value;
     }
+    const parts = path.split(".");
+    let node = out;
+    for (const part of parts.slice(0, -1)) {
+      if (!isPlainObject(node[part])) node[part] = {};
+      node = node[part] as Record<string, unknown>;
+    }
+    node[parts[parts.length - 1]] = parsed;
   }
   return out;
 }
@@ -43,19 +67,35 @@ export function EntityPage() {
   const [typeId, setTypeId] = useState<number | null>(null);
   const [playerId, setPlayerId] = useState("");
   const [rows, setRows] = useState<AttrRow[]>([]);
+  const [jsonMode, setJsonMode] = useState(false);
+  const [jsonText, setJsonText] = useState("{}");
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TemplatePreview | null>(null);
+  const [lookup, setLookup] = useState<DiscordMember | null>(null);
+  const [lookupErr, setLookupErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Инициализация формы из загруженной сущности.
   useEffect(() => {
     if (!entity.data) return;
     setLabel(entity.data.label);
     setPicture(entity.data.picture);
     setTypeId(entity.data.type_id);
-    setPlayerId(entity.data.assignment?.player_id?.toString() ?? "");
-    setRows(attrsToRows(entity.data.attributes));
+    setPlayerId(entity.data.assignment?.player_id ?? "");
+    setRows(flatten(entity.data.attributes));
+    setJsonText(JSON.stringify(entity.data.attributes, null, 2));
   }, [entity.data]);
+
+  // Текущие атрибуты — из активного режима редактирования.
+  const attributes = useMemo<Record<string, unknown>>(() => {
+    if (!jsonMode) return unflatten(rows);
+    try {
+      const parsed = JSON.parse(jsonText || "{}");
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, [jsonMode, rows, jsonText]);
 
   const template = useMemo(
     () => types.data?.find((t) => t.id === typeId)?.attributes_template ?? "",
@@ -66,31 +106,67 @@ export function EntityPage() {
   useEffect(() => {
     const handle = setTimeout(async () => {
       try {
-        const res = await api.previewTemplate(pid, {
-          template,
-          attributes: rowsToAttrs(rows),
-          label,
-        });
+        const res = await api.previewTemplate(pid, { template, attributes, label });
         setPreview(res);
       } catch (e) {
         setPreview({ rendered: "", error: String(e) });
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [pid, template, rows, label]);
+  }, [pid, template, attributes, label]);
+
+  function switchMode(toJson: boolean) {
+    if (toJson) {
+      setJsonText(JSON.stringify(unflatten(rows), null, 2));
+      setJsonError(null);
+    } else {
+      try {
+        const parsed = JSON.parse(jsonText || "{}");
+        if (!isPlainObject(parsed)) throw new Error("Ожидается объект");
+        setRows(flatten(parsed));
+        setJsonError(null);
+      } catch (e) {
+        setJsonError(`Некорректный JSON: ${String(e)}`);
+        return;
+      }
+    }
+    setJsonMode(toJson);
+  }
+
+  async function checkPlayer() {
+    setLookup(null);
+    setLookupErr(null);
+    if (!/^\d+$/.test(playerId.trim())) {
+      setLookupErr("ID должен состоять только из цифр");
+      return;
+    }
+    try {
+      setLookup(await api.getDiscordMember(pid, playerId.trim()));
+    } catch (e) {
+      setLookupErr(String(e));
+    }
+  }
 
   async function save() {
+    if (jsonMode) {
+      try {
+        const parsed = JSON.parse(jsonText || "{}");
+        if (!isPlainObject(parsed)) throw new Error("Ожидается объект");
+      } catch (e) {
+        setMsg(`Некорректный JSON: ${String(e)}`);
+        return;
+      }
+    }
+    const id = playerId.trim();
+    if (id && !/^\d+$/.test(id)) {
+      setMsg("Discord ID игрока должен состоять только из цифр");
+      return;
+    }
     setSaving(true);
     setMsg(null);
     try {
-      await api.updateEntity(pid, eid, {
-        label,
-        picture,
-        type_id: typeId,
-        attributes: rowsToAttrs(rows),
-      });
-      const pid_num = playerId.trim() === "" ? null : Number(playerId);
-      await api.assignPlayer(pid, eid, Number.isNaN(pid_num as number) ? null : pid_num);
+      await api.updateEntity(pid, eid, { label, picture, type_id: typeId, attributes });
+      await api.assignPlayer(pid, eid, id || null);
       setMsg("Сохранено");
       entity.reload();
     } catch (e) {
@@ -119,8 +195,7 @@ export function EntityPage() {
       {msg && <div className={msg === "Сохранено" ? "muted" : "error"}>{msg}</div>}
 
       <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
-        {/* Левая колонка — поля */}
-        <div style={{ flex: "1 1 420px", minWidth: 320 }}>
+        <div style={{ flex: "1 1 460px", minWidth: 320 }}>
           <div>
             <label>Название</label>
             <input value={label} onChange={(e) => setLabel(e.target.value)} />
@@ -141,56 +216,125 @@ export function EntityPage() {
               </select>
             </div>
             <div style={{ flex: 1 }}>
-              <label>Игрок (Discord ID)</label>
-              <input
-                value={playerId}
-                placeholder="пусто = не закреплён"
-                onChange={(e) => setPlayerId(e.target.value)}
-              />
+              <label>Картинка (URL)</label>
+              <input value={picture} onChange={(e) => setPicture(e.target.value)} />
             </div>
           </div>
-          <div>
-            <label>Картинка (URL)</label>
-            <input value={picture} onChange={(e) => setPicture(e.target.value)} />
+
+          {/* --- игрок --- */}
+          <div className="section">
+            <label>Игрок</label>
+            <div className="muted" style={{ marginBottom: 6 }}>
+              Сейчас: <PlayerBadge assignment={entity.data?.assignment} />
+            </div>
+            <div className="row" style={{ gap: 8 }}>
+              <input
+                value={playerId}
+                placeholder="Discord user ID (пусто = снять)"
+                onChange={(e) => {
+                  setPlayerId(e.target.value);
+                  setLookup(null);
+                  setLookupErr(null);
+                }}
+              />
+              <button className="ghost" onClick={checkPlayer} disabled={!playerId.trim()}>
+                Проверить
+              </button>
+            </div>
+            {lookup && (
+              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <img
+                  src={lookup.avatar_url}
+                  alt=""
+                  width={28}
+                  height={28}
+                  style={{ borderRadius: "50%" }}
+                />
+                <span>{lookup.name}</span>
+                <span className="muted" style={{ fontSize: 13 }}>
+                  — будет закреплён после сохранения
+                </span>
+              </div>
+            )}
+            {lookupErr && <div className="error">{lookupErr}</div>}
           </div>
 
+          {/* --- атрибуты --- */}
           <div className="section">
             <div className="row spread">
               <label style={{ margin: 0 }}>Атрибуты</label>
-              <button className="ghost" onClick={() => setRows([...rows, { key: "", value: "" }])}>
-                + атрибут
-              </button>
-            </div>
-            {rows.map((r, i) => (
-              <div className="kv-row" key={i} style={{ marginTop: 8 }}>
-                <input
-                  placeholder="ключ"
-                  value={r.key}
-                  onChange={(e) =>
-                    setRows(rows.map((x, idx) => (idx === i ? { ...x, key: e.target.value } : x)))
-                  }
-                />
-                <input
-                  placeholder="значение"
-                  value={r.value}
-                  onChange={(e) =>
-                    setRows(rows.map((x, idx) => (idx === i ? { ...x, value: e.target.value } : x)))
-                  }
-                />
-                <button
-                  className="ghost danger"
-                  onClick={() => setRows(rows.filter((_, idx) => idx !== i))}
-                >
-                  ✕
+              <div className="row" style={{ gap: 6 }}>
+                <button className="ghost" onClick={() => switchMode(!jsonMode)}>
+                  {jsonMode ? "← Поля" : "JSON →"}
                 </button>
+                {!jsonMode && (
+                  <button className="ghost" onClick={() => setRows([...rows, { key: "", value: "" }])}>
+                    + атрибут
+                  </button>
+                )}
               </div>
-            ))}
-            {rows.length === 0 && <p className="muted">Атрибутов нет.</p>}
+            </div>
+
+            {!jsonMode && (
+              <>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  Вложенность — через точку: <code>ВС.людские_ресурсы</code>. В шаблоне:{" "}
+                  <code>{"{{ ВС.людские_ресурсы }}"}</code>
+                </p>
+                {rows.map((r, i) => (
+                  <div className="kv-row" key={i} style={{ marginTop: 8 }}>
+                    <input
+                      placeholder="ключ или путь.через.точку"
+                      value={r.key}
+                      onChange={(e) =>
+                        setRows(rows.map((x, idx) => (idx === i ? { ...x, key: e.target.value } : x)))
+                      }
+                    />
+                    <input
+                      placeholder="значение"
+                      value={r.value}
+                      onChange={(e) =>
+                        setRows(rows.map((x, idx) => (idx === i ? { ...x, value: e.target.value } : x)))
+                      }
+                    />
+                    <button
+                      className="ghost danger"
+                      onClick={() => setRows(rows.filter((_, idx) => idx !== i))}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                {rows.length === 0 && <p className="muted">Атрибутов нет.</p>}
+              </>
+            )}
+
+            {jsonMode && (
+              <>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  Полный JSON атрибутов — удобно для глубокой вложенности и списков.
+                </p>
+                <textarea
+                  value={jsonText}
+                  style={{ minHeight: 260 }}
+                  onChange={(e) => {
+                    setJsonText(e.target.value);
+                    try {
+                      JSON.parse(e.target.value || "{}");
+                      setJsonError(null);
+                    } catch (err) {
+                      setJsonError(String(err));
+                    }
+                  }}
+                />
+                {jsonError && <div className="error">{jsonError}</div>}
+              </>
+            )}
           </div>
         </div>
 
-        {/* Правая колонка — предпросмотр embed */}
-        <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+        {/* --- предпросмотр --- */}
+        <div style={{ flex: "1 1 320px", minWidth: 280, position: "sticky", top: 16 }}>
           <label>Предпросмотр embed (как в Discord /me-info)</label>
           {!template && <p className="muted">У типа нет шаблона.</p>}
           {preview?.error ? (

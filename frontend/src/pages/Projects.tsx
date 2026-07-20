@@ -73,12 +73,7 @@ function CreateProjectModal({
     setBusy(true);
     setErr(null);
     try {
-      await api.createProject({
-        label,
-        type,
-        desc,
-        guild_id: guildId ? Number(guildId) : null,
-      });
+      await api.createProject({ label, type, desc, guild_id: guildId || null });
       onCreated();
     } catch (e) {
       setErr(String(e));

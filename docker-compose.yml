@@ -28,7 +28,11 @@ services:
       MASTER_PASSWORD: ${MASTER_PASSWORD:-changeme}
       SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      UPLOAD_DIR: /data/uploads
       CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:8080"]}'
+    volumes:
+      - gambit_uploads:/data/uploads
     ports:
       - "${BACKEND_PORT:-8000}:8000"
 
@@ -53,3 +57,4 @@ services:
 
 volumes:
   gambit_pgdata:
+  gambit_uploads:

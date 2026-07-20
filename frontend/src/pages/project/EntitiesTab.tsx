@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
+import { PlayerBadge } from "../../components/PlayerBadge";
 import type { Entity, EntityType } from "../../types";
 
 export function EntitiesTab({ projectId }: { projectId: number }) {
@@ -31,7 +32,7 @@ export function EntitiesTab({ projectId }: { projectId: number }) {
             <tr>
               <th>Название</th>
               <th>Тип</th>
-              <th>Игрок (Discord ID)</th>
+              <th>Игрок</th>
               <th></th>
             </tr>
           </thead>
@@ -42,7 +43,9 @@ export function EntitiesTab({ projectId }: { projectId: number }) {
                   <Link to={`/projects/${projectId}/entities/${e.id}`}>{e.label}</Link>
                 </td>
                 <td className="muted">{typeName(e.type_id)}</td>
-                <td className="muted">{e.assignment?.player_id ?? "—"}</td>
+                <td>
+                  <PlayerBadge assignment={e.assignment} />
+                </td>
                 <td style={{ textAlign: "right" }}>
                   <button
                     className="ghost danger"

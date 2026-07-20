@@ -10,7 +10,10 @@ from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.attributes import apply_attribute_patch
 from app.database import get_db
+from app.expressions import ExpressionError
+from app.expressions import evaluate
 from app.models import Entity
 from app.models import PostStatus
 from app.models import Post
@@ -35,20 +38,57 @@ async def get_post_or_404(project_id: int, post_id: int, db: AsyncSession) -> Po
 
 
 async def apply_entity_edits(project_id: int, edits: list, db: AsyncSession) -> None:
-    """Применить правки сущностей: простое обновление (перезапись ключей attributes)."""
+    """Применить правки сущностей.
+
+    Поддерживаются два формата:
+      * ops — список операций set/expr/delete над dot-path (выражения считаются
+        по АКТУАЛЬНЫМ атрибутам, последовательно, поэтому операции видят
+        результат предыдущих);
+      * attributes — прежний формат-патч (deep merge).
+    """
     for edit in edits or []:
-        entity_id = edit.get("entity_id") if isinstance(edit, dict) else None
-        attrs = edit.get("attributes") if isinstance(edit, dict) else None
-        if entity_id is None or not attrs:
+        if not isinstance(edit, dict):
             continue
+        entity_id = edit.get("entity_id")
+        if entity_id is None:
+            continue
+        ops = edit.get("ops") or []
+        attrs = edit.get("attributes") or {}
+        if not ops and not attrs:
+            continue
+
         entity = await db.get(Entity, entity_id)
         if entity is None or entity.project_id != project_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Сущность {entity_id} не принадлежит проекту",
             )
-        # merge: перезаписываем указанные ключи, остальные сохраняем.
-        entity.attributes = {**(entity.attributes or {}), **attrs}
+
+        current = dict(entity.attributes or {})
+        for op in ops:
+            if not isinstance(op, dict):
+                continue
+            path = (op.get("path") or "").strip()
+            if not path:
+                continue
+            mode = op.get("mode") or "set"
+            if mode == "delete":
+                current = apply_attribute_patch(current, {path: None})
+            elif mode == "expr":
+                try:
+                    value = evaluate(str(op.get("value") or ""), current)
+                except ExpressionError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"«{entity.label}» → {path}: {exc}",
+                    )
+                current = apply_attribute_patch(current, {path: value})
+            else:
+                current = apply_attribute_patch(current, {path: op.get("value")})
+
+        if attrs:
+            current = apply_attribute_patch(current, attrs)
+        entity.attributes = current
 
 
 @router.get("", response_model=list[PostOut])

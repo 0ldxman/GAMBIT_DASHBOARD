@@ -6,6 +6,7 @@
   2. Слэш-команды: /me-info, /ping-master, /register (модалка из формы проекта).
 """
 
+import io
 import logging
 from typing import Any
 from typing import Optional
@@ -39,9 +40,10 @@ def _parse_color(value: str) -> Optional[discord.Color]:
 def _build_embed(post: dict[str, Any]) -> Optional[discord.Embed]:
     if not post.get("use_embed"):
         return None
+    # У эмбеда собственные заголовок и описание — они отделены от текста сообщения.
     embed = discord.Embed(
-        title=post.get("title") or None,
-        description=post.get("content") or None,
+        title=post.get("embed_title") or None,
+        description=post.get("embed_description") or None,
         color=_parse_color(post.get("embed_color", "")),
     )
     if post.get("author_name"):
@@ -51,6 +53,21 @@ def _build_embed(post: dict[str, Any]) -> Optional[discord.Embed]:
     if post.get("embed_image_url"):
         embed.set_image(url=post["embed_image_url"])
     return embed
+
+
+async def _build_files(post: dict[str, Any]) -> list[discord.File]:
+    """Скачать вложения верда с backend и превратить в discord.File."""
+    files: list[discord.File] = []
+    for att in post.get("attachments") or []:
+        if not isinstance(att, dict) or not att.get("url"):
+            continue
+        try:
+            data = await api.fetch_attachment(att["url"])
+        except Exception:  # noqa: BLE001 — одно битое вложение не должно рушить верд
+            logger.exception("Не удалось скачать вложение %s", att.get("url"))
+            continue
+        files.append(discord.File(io.BytesIO(data), filename=att.get("filename") or "file"))
+    return files
 
 
 async def _ensure_webhook(channel: discord.TextChannel, project_id: Optional[int]) -> discord.Webhook:
@@ -89,15 +106,17 @@ async def deliver_posts() -> None:
         try:
             webhook = await _ensure_webhook(channel, post.get("project_id"))
             embed = _build_embed(post)
+            files = await _build_files(post)
             content = post.get("content") or ""
-            # Discord требует непустой content, если нет эмбеда.
-            if not content and embed is None:
+            # Discord требует непустой content, если нет ни эмбеда, ни файлов.
+            if not content and embed is None and not files:
                 content = "​"  # zero-width space
             msg = await webhook.send(
                 content=content or discord.utils.MISSING,
                 username=post.get("author_name") or discord.utils.MISSING,
                 avatar_url=post.get("author_avatar_url") or discord.utils.MISSING,
                 embeds=[embed] if embed else discord.utils.MISSING,
+                files=files or discord.utils.MISSING,
                 wait=True,
             )
             await api.mark_delivered(post["id"], msg.id)

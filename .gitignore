@@ -17,3 +17,6 @@ frontend/dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Загруженные вложения (локально)
+backend/data/

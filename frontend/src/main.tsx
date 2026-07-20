@@ -12,6 +12,7 @@ import { Login } from "./pages/Login";
 import { Projects } from "./pages/Projects";
 import { ProjectPage } from "./pages/Project";
 import { EntityPage } from "./pages/Entity";
+import { PostEditorPage } from "./pages/PostEditor";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthed } = useAuth();
@@ -32,6 +33,7 @@ const router = createBrowserRouter([
       { index: true, element: <Projects /> },
       { path: "projects/:projectId", element: <ProjectPage /> },
       { path: "projects/:projectId/entities/:entityId", element: <EntityPage /> },
+      { path: "projects/:projectId/posts/:postId", element: <PostEditorPage /> },
     ],
   },
 ]);

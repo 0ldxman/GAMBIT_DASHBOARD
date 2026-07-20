@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Общий секрет между API и ботом для /internal/* ручек.
     internal_api_key: str = "dev-internal-key-change-me"
 
+    # Каталог для загруженных вложений. В докере переопределяется на том (/data/uploads).
+    upload_dir: str = "./data/uploads"
+
 
 @lru_cache
 def get_settings() -> Settings:

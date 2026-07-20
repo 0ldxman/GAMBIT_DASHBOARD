@@ -98,6 +98,37 @@ th { color: var(--muted); font-weight: 500; }
   padding: 12px 14px; white-space: pre-wrap; font-size: 14px; line-height: 1.5;
 }
 .error { color: var(--danger); font-size: 13px; }
+
+/* ---- предпросмотр «как в Discord» ---- */
+.dc-message {
+  display: flex; gap: 16px; padding: 12px 16px;
+  background: #313338; border-radius: 8px; color: #dbdee1;
+  font-family: "gg sans", "Noto Sans", system-ui, sans-serif; font-size: 15px; line-height: 1.375;
+}
+.dc-avatar { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; object-fit: cover; }
+.dc-body { min-width: 0; flex: 1; }
+.dc-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.dc-author { color: #f2f3f5; font-weight: 500; }
+.dc-bot {
+  background: #5865f2; color: #fff; font-size: 10px; font-weight: 600;
+  padding: 1px 4px; border-radius: 3px; text-transform: uppercase;
+}
+.dc-time { color: #949ba4; font-size: 12px; }
+.dc-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dc-embed {
+  margin-top: 8px; padding: 12px 16px 12px 12px; max-width: 520px;
+  background: #2b2d31; border-left: 4px solid #4f545c; border-radius: 4px;
+}
+.dc-embed-author { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #f2f3f5; margin-bottom: 8px; }
+.dc-embed-author img { width: 24px; height: 24px; border-radius: 50%; }
+.dc-embed-title { color: #00a8fc; font-weight: 600; margin-bottom: 8px; }
+.dc-embed-desc { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.dc-embed-image { max-width: 100%; border-radius: 4px; margin-top: 12px; display: block; }
+.dc-attach-image { max-width: 420px; max-height: 320px; border-radius: 8px; margin-top: 8px; display: block; }
+.dc-attach-file {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 10px;
+  background: #2b2d31; border: 1px solid #1e1f22; border-radius: 8px; font-size: 14px;
+}
 .center-screen { display: flex; align-items: center; justify-content: center; height: 100%; }
 .login-box { width: min(360px, 90vw); }
 .kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; }

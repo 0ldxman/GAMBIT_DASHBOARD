@@ -30,7 +30,11 @@ services:
       MASTER_PASSWORD: ${MASTER_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      UPLOAD_DIR: /data/uploads
       CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost"]}'
+    volumes:
+      - gambit_uploads:/data/uploads
     networks:
       - gambit_internal
 
@@ -75,3 +79,4 @@ networks:
 
 volumes:
   gambit_pgdata:
+  gambit_uploads:
