@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
-import { PlayerBadge } from "../../components/PlayerBadge";
+import { MembersSummary } from "../../components/PlayerBadge";
 import type { Entity, EntityType } from "../../types";
 
 export function EntitiesTab({ projectId }: { projectId: number }) {
@@ -32,7 +32,7 @@ export function EntitiesTab({ projectId }: { projectId: number }) {
             <tr>
               <th>Название</th>
               <th>Тип</th>
-              <th>Игрок</th>
+              <th>Игроки</th>
               <th></th>
             </tr>
           </thead>
@@ -44,7 +44,7 @@ export function EntitiesTab({ projectId }: { projectId: number }) {
                 </td>
                 <td className="muted">{typeName(e.type_id)}</td>
                 <td>
-                  <PlayerBadge assignment={e.assignment} />
+                  <MembersSummary members={e.members} />
                 </td>
                 <td style={{ textAlign: "right" }}>
                   <button

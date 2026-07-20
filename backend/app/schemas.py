@@ -34,6 +34,8 @@ class ProjectBase(BaseModel):
     type: str = ""
     desc: str = ""
     guild_id: Optional[DiscordId] = None
+    master_role_id: Optional[DiscordId] = None
+    player_role_id: Optional[DiscordId] = None
 
 
 class ProjectCreate(ProjectBase):
@@ -45,6 +47,8 @@ class ProjectUpdate(BaseModel):
     type: Optional[str] = None
     desc: Optional[str] = None
     guild_id: Optional[DiscordId] = None
+    master_role_id: Optional[DiscordId] = None
+    player_role_id: Optional[DiscordId] = None
 
 
 class ProjectOut(ORMModel):
@@ -53,6 +57,8 @@ class ProjectOut(ORMModel):
     type: str
     desc: str
     guild_id: Optional[DiscordId]
+    master_role_id: Optional[DiscordId]
+    player_role_id: Optional[DiscordId]
     created_at: datetime
 
 
@@ -61,6 +67,7 @@ class ChannelBase(BaseModel):
     channel_id: DiscordId
     channel_type: str = ""
     label: str = ""
+    discord_parent_id: Optional[DiscordId] = None
 
 
 class ChannelCreate(ChannelBase):
@@ -79,6 +86,7 @@ class ChannelOut(ORMModel):
     channel_id: DiscordId
     channel_type: str
     label: str
+    discord_parent_id: Optional[DiscordId]
 
 
 # ---------- entity type ----------
@@ -111,7 +119,6 @@ class EntityBase(BaseModel):
     label: str
     type_id: Optional[int] = None
     picture: str = ""
-    parent_id: Optional[int] = None
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -123,15 +130,63 @@ class EntityUpdate(BaseModel):
     label: Optional[str] = None
     type_id: Optional[int] = None
     picture: Optional[str] = None
-    parent_id: Optional[int] = None
     attributes: Optional[dict[str, Any]] = None
 
 
-class AssignmentOut(ORMModel):
+# ---------- участники сущности ----------
+class MemberOut(ORMModel):
     id: int
-    player_id: Optional[DiscordId]
-    player_name: str = ""
-    player_avatar_url: str = ""
+    entity_id: int
+    player_id: DiscordId
+    role: str
+    is_primary: bool
+    player_name: str
+    player_avatar_url: str
+
+
+class MemberCreate(BaseModel):
+    player_id: DiscordId
+    role: str = ""
+    is_primary: bool = False
+
+
+class MemberUpdate(BaseModel):
+    role: Optional[str] = None
+    is_primary: Optional[bool] = None
+
+
+# ---------- связи сущностей ----------
+class RelationOut(ORMModel):
+    id: int
+    parent_id: int
+    child_id: int
+    relation_type: str
+
+
+class RelationCreate(BaseModel):
+    # Направление: parent → child. Указывается вторая сторона и её роль в связи.
+    child_id: int
+    relation_type: str = "состав"
+
+
+# ---------- каналы сущности ----------
+class EntityChannelOut(ORMModel):
+    id: int
+    entity_id: int
+    discord_channel_id: DiscordId
+    label: str
+    sync_access: bool
+
+
+class EntityChannelCreate(BaseModel):
+    discord_channel_id: DiscordId
+    label: str = ""
+    sync_access: bool = True
+
+
+class EntityChannelUpdate(BaseModel):
+    label: Optional[str] = None
+    sync_access: Optional[bool] = None
 
 
 class EntityOut(ORMModel):
@@ -140,13 +195,8 @@ class EntityOut(ORMModel):
     type_id: Optional[int]
     label: str
     picture: str
-    parent_id: Optional[int]
     attributes: dict[str, Any]
-    assignment: Optional[AssignmentOut] = None
-
-
-class AssignPlayerRequest(BaseModel):
-    player_id: Optional[DiscordId] = None  # None снимает закрепление
+    members: list[MemberOut] = Field(default_factory=list)
 
 
 # ---------- discord справочники ----------
@@ -155,7 +205,24 @@ class DiscordChannelOut(BaseModel):
     name: str
     type: str
     position: int
+    parent_id: Optional[str] = None
     parent_name: Optional[str] = None
+
+
+class DiscordRoleOut(BaseModel):
+    role_id: str
+    name: str
+    position: int
+
+
+class CreateChannelRequest(BaseModel):
+    name: str
+    channel_type: str = "text"
+    parent_id: Optional[DiscordId] = None  # категория
+    private: bool = False
+    # Сразу привязать созданный канал к сущности (и выдать доступ её игрокам).
+    entity_id: Optional[int] = None
+    register_channel: bool = True  # добавить в список каналов проекта
 
 
 class DiscordMemberOut(BaseModel):

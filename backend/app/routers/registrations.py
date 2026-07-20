@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Entity
-from app.models import ProjectEntity
+from app.models import EntityMember
 from app.models import Registration
 from app.models import RegistrationStatus
 from app.routers.projects import get_project_or_404
@@ -69,7 +69,12 @@ async def approve_registration(
         db.add(entity)
         await db.flush()  # получить entity.id
         db.add(
-            ProjectEntity(project_id=project_id, entity_id=entity.id, player_id=reg.discord_user_id)
+            EntityMember(
+                entity_id=entity.id,
+                player_id=reg.discord_user_id,
+                is_primary=True,
+                player_name=reg.discord_username,
+            )
         )
         reg.entity_id = entity.id
 

@@ -4,8 +4,12 @@ import type {
   Channel,
   DiscordChannel,
   DiscordMember,
+  DiscordRole,
   Entity,
+  EntityChannel,
   EntityType,
+  Member,
+  Relation,
   Post,
   Project,
   Registration,
@@ -117,12 +121,53 @@ export const api = {
     request<Entity>("PATCH", `/projects/${pid}/entities/${eid}`, data),
   deleteEntity: (pid: number, eid: number) =>
     request<void>("DELETE", `/projects/${pid}/entities/${eid}`),
-  assignPlayer: (pid: number, eid: number, player_id: string | null) =>
-    request<Entity>("PUT", `/projects/${pid}/entities/${eid}/assignment`, {
-      player_id,
-    }),
   renderEntity: (pid: number, eid: number) =>
     request<TemplatePreview>("GET", `/projects/${pid}/entities/${eid}/render`),
+
+  // участники сущности (несколько игроков с ролями)
+  listMembers: (pid: number, eid: number) =>
+    request<Member[]>("GET", `/projects/${pid}/entities/${eid}/members`),
+  addMember: (
+    pid: number,
+    eid: number,
+    data: { player_id: string; role: string; is_primary: boolean },
+  ) => request<Member>("POST", `/projects/${pid}/entities/${eid}/members`, data),
+  updateMember: (
+    pid: number,
+    eid: number,
+    mid: number,
+    data: { role?: string; is_primary?: boolean },
+  ) => request<Member>("PATCH", `/projects/${pid}/entities/${eid}/members/${mid}`, data),
+  removeMember: (pid: number, eid: number, mid: number) =>
+    request<void>("DELETE", `/projects/${pid}/entities/${eid}/members/${mid}`),
+
+  // типизированные связи сущностей
+  listRelations: (pid: number, eid: number) =>
+    request<Relation[]>("GET", `/projects/${pid}/entities/${eid}/relations`),
+  addRelation: (
+    pid: number,
+    eid: number,
+    data: { child_id: number; relation_type: string },
+  ) => request<Relation>("POST", `/projects/${pid}/entities/${eid}/relations`, data),
+  deleteRelation: (pid: number, eid: number, rid: number) =>
+    request<void>("DELETE", `/projects/${pid}/entities/${eid}/relations/${rid}`),
+
+  // каналы сущности
+  listEntityChannels: (pid: number, eid: number) =>
+    request<EntityChannel[]>("GET", `/projects/${pid}/entities/${eid}/channels`),
+  linkEntityChannel: (
+    pid: number,
+    eid: number,
+    data: { discord_channel_id: string; label: string; sync_access: boolean },
+  ) => request<EntityChannel>("POST", `/projects/${pid}/entities/${eid}/channels`, data),
+  updateEntityChannel: (
+    pid: number,
+    eid: number,
+    lid: number,
+    data: { label?: string; sync_access?: boolean },
+  ) => request<EntityChannel>("PATCH", `/projects/${pid}/entities/${eid}/channels/${lid}`, data),
+  unlinkEntityChannel: (pid: number, eid: number, lid: number) =>
+    request<void>("DELETE", `/projects/${pid}/entities/${eid}/channels/${lid}`),
 
   // posts (верды)
   listPosts: (pid: number, status?: string) =>
@@ -174,6 +219,19 @@ export const api = {
     request<DiscordChannel[]>("GET", `/projects/${pid}/discord/channels`),
   getDiscordMember: (pid: number, userId: string) =>
     request<DiscordMember>("GET", `/projects/${pid}/discord/members/${userId}`),
+  listDiscordRoles: (pid: number) =>
+    request<DiscordRole[]>("GET", `/projects/${pid}/discord/roles`),
+  createDiscordChannel: (
+    pid: number,
+    data: {
+      name: string;
+      channel_type: string;
+      parent_id: string | null;
+      private: boolean;
+      entity_id: number | null;
+      register_channel: boolean;
+    },
+  ) => request<DiscordChannel>("POST", `/projects/${pid}/discord/channels`, data),
 
   // forms (регистрационные формы)
   listForms: (pid: number) =>

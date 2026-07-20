@@ -4,6 +4,8 @@ export interface Project {
   type: string;
   desc: string;
   guild_id: string | null;
+  master_role_id: string | null;
+  player_role_id: string | null;
   created_at: string;
 }
 
@@ -13,6 +15,7 @@ export interface Channel {
   channel_id: string;
   channel_type: string;
   label: string;
+  discord_parent_id: string | null;
 }
 
 export interface EntityType {
@@ -23,11 +26,37 @@ export interface EntityType {
   attributes_template: string;
 }
 
-export interface Assignment {
+export interface Member {
   id: number;
-  player_id: string | null;
+  entity_id: number;
+  player_id: string;
+  role: string;
+  is_primary: boolean;
   player_name: string;
   player_avatar_url: string;
+}
+
+/** Типизированная связь сущностей: parent → child. */
+export interface Relation {
+  id: number;
+  parent_id: number;
+  child_id: number;
+  relation_type: string;
+}
+
+/** Привязка Discord-канала к сущности. */
+export interface EntityChannel {
+  id: number;
+  entity_id: number;
+  discord_channel_id: string;
+  label: string;
+  sync_access: boolean;
+}
+
+export interface DiscordRole {
+  role_id: string;
+  name: string;
+  position: number;
 }
 
 /** Канал сервера Discord (справочник для выбора). */
@@ -36,6 +65,7 @@ export interface DiscordChannel {
   name: string;
   type: string;
   position: number;
+  parent_id: string | null;
   parent_name: string | null;
 }
 
@@ -52,9 +82,8 @@ export interface Entity {
   type_id: number | null;
   label: string;
   picture: string;
-  parent_id: number | null;
   attributes: Record<string, unknown>;
-  assignment: Assignment | null;
+  members: Member[];
 }
 
 export type PostStatus = "draft" | "scheduled" | "published";

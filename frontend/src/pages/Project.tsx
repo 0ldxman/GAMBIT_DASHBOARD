@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
-import type { AppNotification, Project } from "../types";
+import type { AppNotification, DiscordRole, Project } from "../types";
 import { EntitiesTab } from "./project/EntitiesTab";
 import { EntityTypesTab } from "./project/EntityTypesTab";
 import { ChannelsTab } from "./project/ChannelsTab";
@@ -92,18 +92,35 @@ export function ProjectPage() {
   );
 }
 
+/** Настройки проекта: сервер и роли доступа к приватным каналам. */
 function GuildSetting({ project, onSaved }: { project: Project; onSaved: () => void }) {
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(project.guild_id?.toString() ?? "");
+  const [guild, setGuild] = useState(project.guild_id ?? "");
+  const [masterRole, setMasterRole] = useState(project.master_role_id ?? "");
+  const [playerRole, setPlayerRole] = useState(project.player_role_id ?? "");
+  const [roles, setRoles] = useState<DiscordRole[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
+  // Роли подгружаем только когда открыли настройки — и только если сервер задан.
+  useEffect(() => {
+    if (!editing || !project.guild_id) return;
+    api
+      .listDiscordRoles(project.id)
+      .then(setRoles)
+      .catch(() => setRoles([]));
+  }, [editing, project.id, project.guild_id]);
+
   async function save() {
-    if (value && !/^\d+$/.test(value)) {
-      setErr("Только число");
+    if (guild && !/^\d+$/.test(guild)) {
+      setErr("guild_id — только цифры");
       return;
     }
     try {
-      await api.updateProject(project.id, { guild_id: value || null });
+      await api.updateProject(project.id, {
+        guild_id: guild || null,
+        master_role_id: masterRole || null,
+        player_role_id: playerRole || null,
+      });
       setEditing(false);
       setErr(null);
       onSaved();
@@ -115,25 +132,52 @@ function GuildSetting({ project, onSaved }: { project: Project; onSaved: () => v
   if (!editing) {
     return (
       <button className="ghost" onClick={() => setEditing(true)}>
-        Discord server: {project.guild_id ?? "не задан"}
+        ⚙ Сервер: {project.guild_id ?? "не задан"}
       </button>
     );
   }
+
+  const roleSelect = (value: string, onChange: (v: string) => void) => (
+    <select value={value} onChange={(e) => onChange(e.target.value)} style={{ width: 200 }}>
+      <option value="">— не выбрана —</option>
+      {roles.map((r) => (
+        <option key={r.role_id} value={r.role_id}>
+          {r.name}
+        </option>
+      ))}
+    </select>
+  );
+
   return (
-    <div className="row" style={{ gap: 6 }}>
-      <input
-        value={value}
-        placeholder="guild_id"
-        style={{ width: 200 }}
-        onChange={(e) => setValue(e.target.value)}
-      />
-      <button className="primary" onClick={save}>
-        ОК
-      </button>
-      <button className="ghost" onClick={() => setEditing(false)}>
-        ✕
-      </button>
-      {err && <span className="error">{err}</span>}
+    <div className="card" style={{ minWidth: 320 }}>
+      <div>
+        <label>Discord server (guild) ID</label>
+        <input value={guild} placeholder="guild_id" onChange={(e) => setGuild(e.target.value)} />
+      </div>
+      <div>
+        <label>Роль мастеров</label>
+        {project.guild_id ? (
+          roleSelect(masterRole, setMasterRole)
+        ) : (
+          <span className="muted">укажите сервер, чтобы выбрать роли</span>
+        )}
+      </div>
+      <div>
+        <label>Роль игроков проекта</label>
+        {project.guild_id && roleSelect(playerRole, setPlayerRole)}
+      </div>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Этим ролям всегда открыт доступ к приватным каналам, которые создаёт дашборд.
+      </p>
+      {err && <div className="error">{err}</div>}
+      <div className="row spread">
+        <button className="ghost" onClick={() => setEditing(false)}>
+          Отмена
+        </button>
+        <button className="primary" onClick={save}>
+          Сохранить
+        </button>
+      </div>
     </div>
   );
 }

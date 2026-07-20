@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
-import { PlayerBadge } from "../components/PlayerBadge";
-import type { DiscordMember, Entity, EntityType, TemplatePreview } from "../types";
+import type { Entity, EntityType, TemplatePreview } from "../types";
+import { MembersSection } from "./entity/MembersSection";
+import { RelationsSection } from "./entity/RelationsSection";
+import { ChannelsSection } from "./entity/ChannelsSection";
 
 interface AttrRow {
   key: string;
@@ -61,18 +63,17 @@ export function EntityPage() {
 
   const entity = useAsync<Entity>(() => api.getEntity(pid, eid), [pid, eid]);
   const types = useAsync<EntityType[]>(() => api.listTypes(pid), [pid]);
+  // Список сущностей проекта нужен для выбора второй стороны связи.
+  const allEntities = useAsync<Entity[]>(() => api.listEntities(pid), [pid]);
 
   const [label, setLabel] = useState("");
   const [picture, setPicture] = useState("");
   const [typeId, setTypeId] = useState<number | null>(null);
-  const [playerId, setPlayerId] = useState("");
   const [rows, setRows] = useState<AttrRow[]>([]);
   const [jsonMode, setJsonMode] = useState(false);
   const [jsonText, setJsonText] = useState("{}");
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TemplatePreview | null>(null);
-  const [lookup, setLookup] = useState<DiscordMember | null>(null);
-  const [lookupErr, setLookupErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -81,7 +82,6 @@ export function EntityPage() {
     setLabel(entity.data.label);
     setPicture(entity.data.picture);
     setTypeId(entity.data.type_id);
-    setPlayerId(entity.data.assignment?.player_id ?? "");
     setRows(flatten(entity.data.attributes));
     setJsonText(JSON.stringify(entity.data.attributes, null, 2));
   }, [entity.data]);
@@ -133,20 +133,6 @@ export function EntityPage() {
     setJsonMode(toJson);
   }
 
-  async function checkPlayer() {
-    setLookup(null);
-    setLookupErr(null);
-    if (!/^\d+$/.test(playerId.trim())) {
-      setLookupErr("ID должен состоять только из цифр");
-      return;
-    }
-    try {
-      setLookup(await api.getDiscordMember(pid, playerId.trim()));
-    } catch (e) {
-      setLookupErr(String(e));
-    }
-  }
-
   async function save() {
     if (jsonMode) {
       try {
@@ -157,16 +143,10 @@ export function EntityPage() {
         return;
       }
     }
-    const id = playerId.trim();
-    if (id && !/^\d+$/.test(id)) {
-      setMsg("Discord ID игрока должен состоять только из цифр");
-      return;
-    }
     setSaving(true);
     setMsg(null);
     try {
       await api.updateEntity(pid, eid, { label, picture, type_id: typeId, attributes });
-      await api.assignPlayer(pid, eid, id || null);
       setMsg("Сохранено");
       entity.reload();
     } catch (e) {
@@ -219,44 +199,6 @@ export function EntityPage() {
               <label>Картинка (URL)</label>
               <input value={picture} onChange={(e) => setPicture(e.target.value)} />
             </div>
-          </div>
-
-          {/* --- игрок --- */}
-          <div className="section">
-            <label>Игрок</label>
-            <div className="muted" style={{ marginBottom: 6 }}>
-              Сейчас: <PlayerBadge assignment={entity.data?.assignment} />
-            </div>
-            <div className="row" style={{ gap: 8 }}>
-              <input
-                value={playerId}
-                placeholder="Discord user ID (пусто = снять)"
-                onChange={(e) => {
-                  setPlayerId(e.target.value);
-                  setLookup(null);
-                  setLookupErr(null);
-                }}
-              />
-              <button className="ghost" onClick={checkPlayer} disabled={!playerId.trim()}>
-                Проверить
-              </button>
-            </div>
-            {lookup && (
-              <div className="row" style={{ gap: 8, marginTop: 8 }}>
-                <img
-                  src={lookup.avatar_url}
-                  alt=""
-                  width={28}
-                  height={28}
-                  style={{ borderRadius: "50%" }}
-                />
-                <span>{lookup.name}</span>
-                <span className="muted" style={{ fontSize: 13 }}>
-                  — будет закреплён после сохранения
-                </span>
-              </div>
-            )}
-            {lookupErr && <div className="error">{lookupErr}</div>}
           </div>
 
           {/* --- атрибуты --- */}
@@ -343,6 +285,13 @@ export function EntityPage() {
             <div className="embed-preview">{preview?.rendered || " "}</div>
           )}
         </div>
+      </div>
+
+      {/* --- игроки, связи и каналы: сохраняются сразу, отдельно от полей выше --- */}
+      <div className="stack" style={{ marginTop: 24 }}>
+        <MembersSection projectId={pid} entityId={eid} onChanged={() => entity.reload()} />
+        <RelationsSection projectId={pid} entityId={eid} entities={allEntities.data ?? []} />
+        <ChannelsSection projectId={pid} entityId={eid} />
       </div>
     </div>
   );

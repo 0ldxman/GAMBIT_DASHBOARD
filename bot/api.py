@@ -61,10 +61,13 @@ class ApiClient:
         r.raise_for_status()
 
     # ---------- команды ----------
-    async def me_info(self, guild_id: int, player_id: int) -> Optional[dict[str, Any]]:
-        r = await self._client.get(
-            "/internal/me-info", params={"guild_id": guild_id, "player_id": player_id}
-        )
+    async def me_info(
+        self, guild_id: int, player_id: int, channel_id: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        params: dict[str, Any] = {"guild_id": guild_id, "player_id": player_id}
+        if channel_id:
+            params["channel_id"] = channel_id
+        r = await self._client.get("/internal/me-info", params=params)
         if r.status_code == 404:
             return None
         r.raise_for_status()
@@ -84,8 +87,13 @@ class ApiClient:
         )
         r.raise_for_status()
 
-    async def open_form(self, guild_id: int) -> Optional[dict[str, Any]]:
-        r = await self._client.get("/internal/forms/open", params={"guild_id": guild_id})
+    async def open_form(
+        self, guild_id: int, channel_id: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        params: dict[str, Any] = {"guild_id": guild_id}
+        if channel_id:
+            params["channel_id"] = channel_id
+        r = await self._client.get("/internal/forms/open", params=params)
         if r.status_code == 404:
             return None
         r.raise_for_status()

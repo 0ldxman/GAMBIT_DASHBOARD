@@ -148,7 +148,7 @@ async def me_info(interaction: discord.Interaction) -> None:
     if interaction.guild_id is None:
         await interaction.response.send_message("Команда доступна только на сервере.", ephemeral=True)
         return
-    data = await api.me_info(interaction.guild_id, interaction.user.id)
+    data = await api.me_info(interaction.guild_id, interaction.user.id, interaction.channel_id)
     if data is None:
         await interaction.response.send_message(
             "За вами не закреплена сущность в этом проекте.", ephemeral=True
@@ -216,7 +216,7 @@ async def register(interaction: discord.Interaction) -> None:
     if interaction.guild_id is None:
         await interaction.response.send_message("Команда доступна только на сервере.", ephemeral=True)
         return
-    form = await api.open_form(interaction.guild_id)
+    form = await api.open_form(interaction.guild_id, interaction.channel_id)
     if form is None:
         await interaction.response.send_message(
             "Открытых форм регистрации нет.", ephemeral=True

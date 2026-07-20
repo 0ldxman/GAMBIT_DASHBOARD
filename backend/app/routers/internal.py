@@ -17,9 +17,10 @@ from app.models import NotificationType
 from app.models import Post
 from app.models import PostStatus
 from app.models import Project
-from app.models import ProjectEntity
+from app.models import EntityMember
 from app.models import Registration
 from app.models import RegistrationForm
+from app.resolve import project_for_channel
 from app.schemas import DeliveredIn
 from app.schemas import MeInfoOut
 from app.schemas import PendingPostOut
@@ -34,11 +35,19 @@ from app.templating import render_entity_template
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(require_internal)])
 
 
-async def _project_by_guild(guild_id: int, db: AsyncSession) -> Project:
-    result = await db.execute(select(Project).where(Project.guild_id == guild_id))
-    project = result.scalar_one_or_none()
+async def _resolve_project(
+    guild_id: int, channel_id: int | None, db: AsyncSession
+) -> Project:
+    """Проект для команды бота (см. app/resolve.py) или понятная 404."""
+    project = await project_for_channel(guild_id, channel_id or 0, db)
     if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект для сервера не найден")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Не удалось определить проект. Выполните команду в канале проекта "
+                "или зарегистрируйте категорию проекта в дашборде."
+            ),
+        )
     return project
 
 
@@ -105,14 +114,19 @@ async def save_webhook(body: WebhookIn, db: AsyncSession = Depends(get_db)) -> C
 # ---------- команды ----------
 @router.get("/me-info", response_model=MeInfoOut)
 async def me_info(
-    guild_id: int, player_id: int, db: AsyncSession = Depends(get_db)
+    guild_id: int,
+    player_id: int,
+    channel_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
 ) -> MeInfoOut:
-    """Рендер embed сущности игрока в проекте по guild_id (команда /me-info)."""
-    project = await _project_by_guild(guild_id, db)
+    """Рендер embed сущности игрока (команда /me-info). Проект — по каналу."""
+    project = await _resolve_project(guild_id, channel_id, db)
     result = await db.execute(
         select(Entity)
-        .join(ProjectEntity, ProjectEntity.entity_id == Entity.id)
-        .where(ProjectEntity.project_id == project.id, ProjectEntity.player_id == player_id)
+        .join(EntityMember, EntityMember.entity_id == Entity.id)
+        .where(Entity.project_id == project.id, EntityMember.player_id == player_id)
+        # Основная сущность игрока — первой.
+        .order_by(EntityMember.is_primary.desc())
     )
     entity = result.scalars().first()
     if entity is None:
@@ -129,19 +143,20 @@ async def me_info(
 @router.post("/ping")
 async def ping_master(body: PingIn, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     """Игрок пингует мастера → уведомление во фронтенд."""
-    project = await _project_by_guild(body.guild_id, db)
-    # Если за игроком закреплена сущность — приложим её к уведомлению.
+    project = await _resolve_project(body.guild_id, body.discord_channel_id, db)
+    # Если игрок состоит в сущности — приложим её к уведомлению.
     result = await db.execute(
-        select(ProjectEntity).where(
-            ProjectEntity.project_id == project.id, ProjectEntity.player_id == body.player_id
-        )
+        select(EntityMember)
+        .join(Entity, Entity.id == EntityMember.entity_id)
+        .where(Entity.project_id == project.id, EntityMember.player_id == body.player_id)
+        .order_by(EntityMember.is_primary.desc())
     )
-    assignment = result.scalars().first()
+    membership = result.scalars().first()
     note = Notification(
         project_id=project.id,
         type=NotificationType.ping,
         message=body.message or "Игрок ожидает ответа мастера",
-        entity_id=assignment.entity_id if assignment else None,
+        entity_id=membership.entity_id if membership else None,
         player_id=body.player_id,
         discord_channel_id=body.discord_channel_id,
     )
@@ -152,9 +167,11 @@ async def ping_master(body: PingIn, db: AsyncSession = Depends(get_db)) -> dict[
 
 # ---------- регистрация ----------
 @router.get("/forms/open", response_model=RegistrationFormOut)
-async def open_form(guild_id: int, db: AsyncSession = Depends(get_db)) -> RegistrationForm:
-    """Открытая форма регистрации проекта по guild_id (для команды /register)."""
-    project = await _project_by_guild(guild_id, db)
+async def open_form(
+    guild_id: int, channel_id: int | None = None, db: AsyncSession = Depends(get_db)
+) -> RegistrationForm:
+    """Открытая форма регистрации проекта (для команды /register)."""
+    project = await _project_for(guild_id, channel_id, db)
     result = await db.execute(
         select(RegistrationForm)
         .where(RegistrationForm.project_id == project.id, RegistrationForm.is_open.is_(True))
