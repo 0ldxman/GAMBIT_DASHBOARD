@@ -1,6 +1,6 @@
-# Стек для Portainer: использует готовые образы из GHCR (собираются GitHub Actions).
-# В Portainer → Stacks → Add stack → вставьте этот файл, задайте переменные окружения
-# (IMAGE_OWNER, IMAGE_TAG, пароли, DISCORD_BOT_TOKEN и т.д. — см. .env.example).
+# Стек для Portainer: готовые образы из GHCR (собираются GitHub Actions).
+# Схема сетей: наружу смотрит только frontend (в общей сети с Nginx Proxy Manager),
+# db/backend/bot изолированы во внутренней сети без публикации портов.
 services:
   db:
     image: postgres:16
@@ -16,6 +16,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - gambit_internal
 
   backend:
     image: ghcr.io/${IMAGE_OWNER}/gambit-backend:${IMAGE_TAG:-latest}
@@ -25,10 +27,12 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gambit}:${POSTGRES_PASSWORD:-gambit}@db:5432/${POSTGRES_DB:-gambit}
-      MASTER_PASSWORD: ${MASTER_PASSWORD:-changeme}
-      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
-      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:8080"]}'
+      MASTER_PASSWORD: ${MASTER_PASSWORD}
+      SECRET_KEY: ${SECRET_KEY}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost"]}'
+    networks:
+      - gambit_internal
 
   bot:
     image: ghcr.io/${IMAGE_OWNER}/gambit-bot:${IMAGE_TAG:-latest}
@@ -36,18 +40,38 @@ services:
     depends_on:
       - backend
     environment:
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       API_BASE: http://backend:8000
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       BOT_POLL_SECONDS: ${BOT_POLL_SECONDS:-15}
+    networks:
+      - gambit_internal
 
   frontend:
     image: ghcr.io/${IMAGE_OWNER}/gambit-frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Явное имя — по нему Nginx Proxy Manager будет проксировать (Forward Hostname).
+    container_name: gambit-frontend
     depends_on:
       - backend
-    ports:
-      - "${FRONTEND_PORT:-8080}:80"
+    networks:
+      # web_network — чтобы NPM достучался; gambit_internal — чтобы nginx достучался до backend.
+      - web_network
+      - gambit_internal
+    # Порт наружу не публикуем: трафик идёт через NPM.
+    # Для отладки без NPM можно временно раскомментировать:
+    # ports:
+    #   - "${FRONTEND_PORT:-8080}:80"
+
+networks:
+  web_network:
+    external: true
+    # Если реальное имя сети отличается (проверьте: docker network ls),
+    # укажите его явно, напр.:
+    # name: npm_web_network
+  gambit_internal:
+    driver: bridge
+    # ВАЖНО: не ставить internal: true — боту нужен выход в интернет к Discord API.
 
 volumes:
   gambit_pgdata:

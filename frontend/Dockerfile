@@ -1,5 +1,7 @@
 # --- сборка SPA ---
-FROM node:20-alpine AS build
+# --platform=$BUILDPLATFORM: собираем нативно на архитектуре раннера (без QEMU).
+# Результат — статика, она архитектуро-независима.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci || npm install
