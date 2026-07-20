@@ -3,11 +3,12 @@
 Обязанности:
   1. Доставка вердов: опрашивает backend, отправляет опубликованные верды через
      вебхук (создаёт/переиспользует), с подменой имени/аватара автора и опц. эмбедом.
-  2. Слэш-команды: /me-info, /ping-master, /register (модалка из формы проекта).
+  2. Слэш-команды: /about, /me-info, /ping-master, /register (модалка из формы проекта).
 """
 
 import io
 import logging
+from pathlib import Path
 from typing import Any
 from typing import Optional
 
@@ -173,6 +174,103 @@ async def ping_master(interaction: discord.Interaction, message: str = "") -> No
         await interaction.response.send_message("Проект для сервера не настроен.", ephemeral=True)
         return
     await interaction.response.send_message("Мастер уведомлён ✅", ephemeral=True)
+
+
+async def _about_media(data: dict[str, Any]) -> tuple[Optional[discord.File], bool]:
+    """Вложение карточки проекта: (файл, показывать ли внутри эмбеда).
+
+    Картинки и гифки Discord умеет рисовать внутри эмбеда через attachment://,
+    видео — нет: его он покажет отдельным плеером под сообщением.
+    """
+    url = data.get("media_url")
+    if not url:
+        return None, False
+    try:
+        blob = await api.fetch_attachment(url)
+    except Exception:  # noqa: BLE001 — карточка важнее вложения
+        logger.exception("Не удалось скачать вложение проекта %s", url)
+        return None, False
+
+    content_type = data.get("media_content_type") or ""
+    inline = content_type.startswith("image/")
+    # Имя для ссылки attachment:// берём простое: в исходном могут быть кириллица
+    # и пробелы, из-за которых Discord не свяжет ссылку с файлом.
+    suffix = Path(data.get("media_filename") or url).suffix or ".bin"
+    name = f"about{suffix}"
+    return discord.File(io.BytesIO(blob), filename=name), inline
+
+
+@bot.tree.command(name="about", description="Показать информацию о проекте")
+@app_commands.describe(project="Проект (по умолчанию — проект этого канала)")
+async def about(interaction: discord.Interaction, project: Optional[str] = None) -> None:
+    if interaction.guild_id is None:
+        await interaction.response.send_message("Команда доступна только на сервере.", ephemeral=True)
+        return
+
+    project_id: Optional[int] = None
+    if project:
+        if not project.isdigit():
+            await interaction.response.send_message(
+                "Выберите проект из подсказки.", ephemeral=True
+            )
+            return
+        project_id = int(project)
+
+    await interaction.response.defer()
+    try:
+        data = await api.about(interaction.guild_id, interaction.channel_id, project_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось получить карточку проекта")
+        await interaction.followup.send("Не удалось получить данные проекта.", ephemeral=True)
+        return
+    if data is None:
+        await interaction.followup.send(
+            "Проект не найден. Укажите его аргументом или выполните команду в канале проекта.",
+            ephemeral=True,
+        )
+        return
+
+    # Описание: сначала авторы, затем текст проекта.
+    parts: list[str] = []
+    if data.get("authors"):
+        parts.append(f"**Авторы проекта**\n{data['authors']}")
+    if data.get("desc"):
+        parts.append(data["desc"])
+
+    embed = discord.Embed(
+        title=data["label"],
+        description="\n\n".join(parts) or None,
+        color=discord.Color.blurple(),
+    )
+    if data.get("type"):
+        embed.set_footer(text=data["type"])
+
+    media, inline = await _about_media(data)
+    if media is not None and inline:
+        embed.set_image(url=f"attachment://{media.filename}")
+
+    await interaction.followup.send(
+        embed=embed, file=media if media else discord.utils.MISSING
+    )
+
+
+@about.autocomplete("project")
+async def about_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    if interaction.guild_id is None:
+        return []
+    try:
+        projects = await api.guild_projects(interaction.guild_id)
+    except Exception:  # noqa: BLE001 — без подсказок команда всё ещё работает
+        logger.exception("Не удалось получить проекты сервера")
+        return []
+    query = current.lower()
+    return [
+        app_commands.Choice(name=p["label"][:100], value=str(p["project_id"]))
+        for p in projects
+        if query in p["label"].lower()
+    ][:25]
 
 
 class RegistrationModal(discord.ui.Modal):

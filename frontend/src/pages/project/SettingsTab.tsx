@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { CategoryPicker } from "../../components/CategoryPicker";
@@ -35,6 +35,7 @@ export function SettingsTab({
   const [label, setLabel] = useState(project.label);
   const [type, setType] = useState(project.type);
   const [desc, setDesc] = useState(project.desc);
+  const [authors, setAuthors] = useState(project.authors);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -47,7 +48,13 @@ export function SettingsTab({
     setSaving(true);
     setMsg(null);
     try {
-      await api.updateProject(pid, { label, type, desc, category_ids: categoryIds });
+      await api.updateProject(pid, {
+        label,
+        type,
+        desc,
+        authors,
+        category_ids: categoryIds,
+      });
       setMsg("Сохранено");
       onSaved();
       categories.reload();
@@ -76,6 +83,15 @@ export function SettingsTab({
           <label>Описание</label>
           <textarea value={desc} onChange={(e) => setDesc(e.target.value)} />
         </div>
+        <div>
+          <label>Авторы проекта</label>
+          <textarea
+            value={authors}
+            placeholder="Кто ведёт игру — выводится в /about"
+            style={{ minHeight: 70 }}
+            onChange={(e) => setAuthors(e.target.value)}
+          />
+        </div>
 
         <label style={{ marginTop: 16 }}>Категории проекта</label>
         <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
@@ -98,8 +114,114 @@ export function SettingsTab({
         </div>
       </section>
 
+      <MediaSection project={project} onSaved={onSaved} />
       <RolesSection projectId={pid} guildId={guildId} />
     </div>
+  );
+}
+
+/** Одно вложение в эмбед /about: картинка, гифка или видео. */
+function MediaSection({ project, onSaved }: { project: Project; onSaved: () => void }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const url = project.media_url;
+  const isImage = project.media_content_type.startsWith("image/");
+  const isVideo = project.media_content_type.startsWith("video/");
+
+  async function upload(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const att = await api.uploadAttachment(project.id, file);
+      await api.updateProject(project.id, {
+        media_url: att.url,
+        media_filename: att.filename,
+        media_content_type: att.content_type,
+      });
+      onSaved();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function clear() {
+    setBusy(true);
+    setErr(null);
+    try {
+      // Пустые строки снимают вложение; сам файл на диске остаётся.
+      await api.updateProject(project.id, {
+        media_url: "",
+        media_filename: "",
+        media_content_type: "",
+      });
+      onSaved();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card">
+      <div className="row spread">
+        <h3 style={{ margin: 0 }}>Вложение карточки</h3>
+        <div className="row" style={{ gap: 6 }}>
+          <button className="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>
+            {busy ? "Загрузка…" : url ? "Заменить" : "+ файл"}
+          </button>
+          {url && (
+            <button className="ghost danger" disabled={busy} onClick={clear}>
+              Убрать
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        Показывается в эмбеде команды <code>/about</code>. Картинка и гифка выводятся
+        внутри эмбеда; видео Discord внутрь эмбеда не пускает — оно придёт плеером
+        под сообщением.
+      </p>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*,video/*"
+        style={{ display: "none" }}
+        onChange={(e) => upload(e.target.files)}
+      />
+
+      {!url && <p className="muted">Вложения нет.</p>}
+      {url && (
+        <div className="stack" style={{ gap: 8 }}>
+          {isImage && (
+            <img
+              src={`/api${url}`}
+              alt=""
+              style={{ maxWidth: 420, maxHeight: 260, borderRadius: 8 }}
+            />
+          )}
+          {isVideo && (
+            <video
+              src={`/api${url}`}
+              controls
+              style={{ maxWidth: 420, maxHeight: 260, borderRadius: 8 }}
+            />
+          )}
+          <span className="muted" style={{ fontSize: 13 }}>
+            📎 {project.media_filename} · {project.media_content_type}
+          </span>
+        </div>
+      )}
+      {err && <div className="error">{err}</div>}
+    </section>
   );
 }
 

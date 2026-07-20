@@ -21,10 +21,12 @@ from app.models import EntityMember
 from app.models import Registration
 from app.models import RegistrationForm
 from app.resolve import project_for_channel
+from app.schemas import AboutProjectOut
 from app.schemas import DeliveredIn
 from app.schemas import MeInfoOut
 from app.schemas import PendingPostOut
 from app.schemas import PingIn
+from app.schemas import ProjectBriefOut
 from app.schemas import RegistrationCreate
 from app.schemas import RegistrationFormOut
 from app.schemas import WebhookIn
@@ -165,13 +167,55 @@ async def ping_master(body: PingIn, db: AsyncSession = Depends(get_db)) -> dict[
     return {"status": "ok"}
 
 
+# ---------- карточка проекта ----------
+@router.get("/projects", response_model=list[ProjectBriefOut])
+async def guild_projects(guild_id: int, db: AsyncSession = Depends(get_db)):
+    """Проекты сервера — для автодополнения аргумента /about."""
+    result = await db.execute(
+        select(Project).where(Project.guild_id == guild_id).order_by(Project.label)
+    )
+    return [
+        ProjectBriefOut(project_id=p.id, label=p.label) for p in result.scalars().all()
+    ]
+
+
+@router.get("/about", response_model=AboutProjectOut)
+async def about_project(
+    guild_id: int,
+    channel_id: int | None = None,
+    project_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> AboutProjectOut:
+    """Карточка проекта. Проект выбран явно — берём его, иначе определяем по каналу."""
+    if project_id is not None:
+        project = await db.get(Project, project_id)
+        # Сверяем сервер: иначе с одного сервера читались бы чужие проекты.
+        if project is None or project.guild_id != guild_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден на этом сервере"
+            )
+    else:
+        project = await _resolve_project(guild_id, channel_id, db)
+
+    return AboutProjectOut(
+        project_id=project.id,
+        label=project.label,
+        type=project.type,
+        desc=project.desc,
+        authors=project.authors,
+        media_url=project.media_url,
+        media_filename=project.media_filename,
+        media_content_type=project.media_content_type,
+    )
+
+
 # ---------- регистрация ----------
 @router.get("/forms/open", response_model=RegistrationFormOut)
 async def open_form(
     guild_id: int, channel_id: int | None = None, db: AsyncSession = Depends(get_db)
 ) -> RegistrationForm:
     """Открытая форма регистрации проекта (для команды /register)."""
-    project = await _project_for(guild_id, channel_id, db)
+    project = await _resolve_project(guild_id, channel_id, db)
     result = await db.execute(
         select(RegistrationForm)
         .where(RegistrationForm.project_id == project.id, RegistrationForm.is_open.is_(True))

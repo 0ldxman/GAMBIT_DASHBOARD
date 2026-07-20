@@ -3,7 +3,13 @@ export interface Project {
   label: string;
   type: string;
   desc: string;
+  /** Авторы проекта — выводятся в карточке /about. */
+  authors: string;
   guild_id: string | null;
+  /** Одно вложение внутрь эмбеда /about. */
+  media_url: string;
+  media_filename: string;
+  media_content_type: string;
   created_at: string;
 }
 

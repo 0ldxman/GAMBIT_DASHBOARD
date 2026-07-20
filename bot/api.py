@@ -73,6 +73,29 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def guild_projects(self, guild_id: int) -> list[dict[str, Any]]:
+        """Проекты сервера — для автодополнения /about."""
+        r = await self._client.get("/internal/projects", params={"guild_id": guild_id})
+        r.raise_for_status()
+        return r.json()
+
+    async def about(
+        self,
+        guild_id: int,
+        channel_id: Optional[int] = None,
+        project_id: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        params: dict[str, Any] = {"guild_id": guild_id}
+        if channel_id:
+            params["channel_id"] = channel_id
+        if project_id is not None:
+            params["project_id"] = project_id
+        r = await self._client.get("/internal/about", params=params)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
     async def ping(
         self, guild_id: int, player_id: int, channel_id: Optional[int], message: str
     ) -> None:

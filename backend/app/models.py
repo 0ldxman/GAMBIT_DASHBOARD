@@ -51,6 +51,12 @@ class Project(Base):
     # Discord-сервер. НЕ уникален: на одном сервере может жить несколько проектов,
     # каждый владеет своими категориями (см. ProjectChannel).
     guild_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # Карточка проекта для команды /about.
+    authors: Mapped[str] = mapped_column(Text, default="")
+    # Одно вложение внутрь эмбеда: путь вида /uploads/<pid>/<файл>.
+    media_url: Mapped[str] = mapped_column(String(500), default="")
+    media_filename: Mapped[str] = mapped_column(String(200), default="")
+    media_content_type: Mapped[str] = mapped_column(String(120), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     channels: Mapped[list[ProjectChannel]] = relationship(

@@ -34,6 +34,7 @@ class ProjectCreate(BaseModel):
     label: str
     type: str = ""
     desc: str = ""
+    authors: str = ""
     guild_id: Optional[DiscordId] = None
     # Категории сервера, которыми владеет проект. Всё внутри них — его каналы.
     category_ids: list[DiscordId] = Field(default_factory=list)
@@ -43,7 +44,12 @@ class ProjectUpdate(BaseModel):
     label: Optional[str] = None
     type: Optional[str] = None
     desc: Optional[str] = None
+    authors: Optional[str] = None
     guild_id: Optional[DiscordId] = None
+    # Вложение эмбеда /about; пустая строка снимает его.
+    media_url: Optional[str] = None
+    media_filename: Optional[str] = None
+    media_content_type: Optional[str] = None
     # Полная замена списка категорий; None — не трогать.
     category_ids: Optional[list[DiscordId]] = None
 
@@ -53,7 +59,11 @@ class ProjectOut(ORMModel):
     label: str
     type: str
     desc: str
+    authors: str
     guild_id: Optional[DiscordId]
+    media_url: str
+    media_filename: str
+    media_content_type: str
     created_at: datetime
 
 
@@ -540,6 +550,26 @@ class PingIn(BaseModel):
     player_id: DiscordId
     discord_channel_id: Optional[DiscordId] = None
     message: str = ""
+
+
+class ProjectBriefOut(BaseModel):
+    """Проект сервера для автодополнения аргумента команды /about."""
+
+    project_id: int
+    label: str
+
+
+class AboutProjectOut(BaseModel):
+    """Карточка проекта для команды /about."""
+
+    project_id: int
+    label: str
+    type: str
+    desc: str
+    authors: str
+    media_url: str
+    media_filename: str
+    media_content_type: str
 
 
 class MeInfoOut(BaseModel):
