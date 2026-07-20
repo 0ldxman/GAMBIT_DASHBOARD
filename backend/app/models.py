@@ -51,12 +51,12 @@ class Project(Base):
     # Discord-сервер. НЕ уникален: на одном сервере может жить несколько проектов,
     # каждый владеет своими категориями (см. ProjectChannel).
     guild_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    # Роли, которым всегда открыт доступ к приватным каналам проекта.
-    master_role_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    player_role_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     channels: Mapped[list[ProjectChannel]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    roles: Mapped[list[ProjectRole]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
     entity_types: Mapped[list[EntityType]] = relationship(
@@ -85,6 +85,36 @@ class ProjectChannel(Base):
     discord_parent_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="channels")
+
+
+class AccessLevel(str, enum.Enum):
+    """Что роль сервера значит внутри проекта."""
+
+    admin = "admin"          # полный доступ, видит все каналы проекта
+    moderator = "moderator"  # помощник мастера, тоже видит все каналы
+    player = "player"        # обычный игрок: каналы получает через свои сущности
+
+
+class ProjectRole(Base):
+    """Роль Discord-сервера, наделённая правами внутри проекта.
+
+    Список вместо двух жёстких полей: у игры может быть несколько ролей мастеров
+    (главмастер, модератор экономики) и несколько игроцких.
+    """
+
+    __tablename__ = "project_role"
+    __table_args__ = (UniqueConstraint("project_id", "role_id", name="uq_project_role"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("project.id", ondelete="CASCADE"))
+    role_id: Mapped[int] = mapped_column(BigInteger)  # Discord snowflake
+    name: Mapped[str] = mapped_column(String(200), default="")  # кэш имени роли
+    access_level: Mapped[AccessLevel] = mapped_column(
+        SAEnum(AccessLevel, name="access_level"), default=AccessLevel.player
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="roles")
 
 
 class EntityType(Base):

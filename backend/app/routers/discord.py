@@ -8,9 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
 
+from app.access import master_role_ids
 from app.database import get_db
 from app.discord_api import DiscordError
 from app.discord_api import create_channel
+from app.discord_api import delete_channel as discord_delete_channel
 from app.discord_api import get_guild_member
 from app.discord_api import list_guild_channels
 from app.discord_api import list_guild_roles
@@ -88,7 +90,7 @@ async def create_guild_channel(
             detail="У проекта не указан Discord server (guild_id)",
         )
 
-    allow_roles = [r for r in (project.master_role_id, project.player_role_id) if r]
+    allow_roles = await master_role_ids(project_id, db)
     allow_users: list[int] = []
     entity: Entity | None = None
     if body.entity_id is not None:
@@ -147,3 +149,37 @@ async def create_guild_channel(
         parent_id=created.get("parent_id"),
         parent_name=None,
     )
+
+
+@router.delete("/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_guild_channel(
+    project_id: int, channel_id: int, db: AsyncSession = Depends(get_db)
+) -> None:
+    """Удалить канал в Discord вместе с его регистрацией и привязками.
+
+    Необратимо: канал и его история пропадают на сервере. Вызывается только
+    из явного подтверждения на экране каналов.
+    """
+    await get_project_or_404(project_id, db)
+    try:
+        await discord_delete_channel(channel_id)
+    except DiscordError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    # Подчищаем следы удалённого канала, иначе он останется висеть в привязках.
+    rows = await db.execute(
+        select(ProjectChannel).where(
+            ProjectChannel.project_id == project_id, ProjectChannel.channel_id == channel_id
+        )
+    )
+    for row in rows.scalars().all():
+        await db.delete(row)
+
+    links = await db.execute(
+        select(EntityChannel)
+        .join(Entity, Entity.id == EntityChannel.entity_id)
+        .where(Entity.project_id == project_id, EntityChannel.discord_channel_id == channel_id)
+    )
+    for link in links.scalars().all():
+        await db.delete(link)
+    await db.commit()

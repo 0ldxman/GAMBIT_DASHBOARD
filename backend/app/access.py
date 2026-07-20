@@ -5,8 +5,12 @@
 его из канала организации, если он остаётся участником другой связанной сущности.
 
 Канал с sync_access считается управляемым: пользовательские overwrite'ы на нём
-приводятся к рассчитанному множеству. Роли (мастера/игроки проекта) и сам бот
-не трогаются.
+приводятся к рассчитанному множеству. Мастерские роли проекта (admin/moderator)
+и сам бот не трогаются.
+
+Роли уровня player намеренно НЕ открывают приватные каналы: иначе любой игрок
+проекта видел бы приватный канал любой чужой страны. Игроки получают доступ
+персональными overwrite'ами через свои сущности.
 """
 
 from __future__ import annotations
@@ -19,12 +23,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import discord_api
 from app.discord_api import DiscordError
+from app.models import AccessLevel
 from app.models import Entity
 from app.models import EntityChannel
 from app.models import EntityMember
 from app.models import Project
+from app.models import ProjectRole
 
 logger = logging.getLogger(__name__)
+
+# Уровни, чьи роли всегда видят приватные каналы проекта.
+MASTER_LEVELS = (AccessLevel.admin, AccessLevel.moderator)
+
+
+async def master_role_ids(project_id: int, db: AsyncSession) -> list[int]:
+    """Роли проекта, которым доступ к приватным каналам открыт всегда."""
+    result = await db.execute(
+        select(ProjectRole.role_id).where(
+            ProjectRole.project_id == project_id,
+            ProjectRole.access_level.in_(MASTER_LEVELS),
+        )
+    )
+    return [row[0] for row in result.all() if row[0]]
 
 
 async def _bot_user_id() -> Optional[int]:
@@ -89,13 +109,12 @@ async def sync_channel_access(discord_channel_id: int, db: AsyncSession) -> dict
         await discord_api.remove_overwrite(discord_channel_id, player_id)
         removed += 1
 
-    # Роли доступа проекта держим открытыми всегда.
+    # Мастерские роли проекта держим открытыми всегда.
     roles = 0
     if project:
-        for role_id in (project.master_role_id, project.player_role_id):
-            if role_id:
-                await discord_api.allow_role_in_channel(discord_channel_id, role_id)
-                roles += 1
+        for role_id in await master_role_ids(project.id, db):
+            await discord_api.allow_role_in_channel(discord_channel_id, role_id)
+            roles += 1
 
     logger.info(
         "Канал %s: +%d, -%d игроков, ролей %d", discord_channel_id, added, removed, roles

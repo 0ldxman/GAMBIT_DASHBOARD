@@ -15,20 +15,17 @@ export function ChannelsSection({
     () => api.listEntityChannels(projectId, entityId),
     [projectId, entityId],
   );
+  // Тот же список, что на экране каналов проекта: только каналы категорий проекта.
   const guild = useAsync<DiscordChannel[]>(
-    () => api.listDiscordChannels(projectId).catch(() => []),
+    () => api.availableChannels(projectId).catch(() => []),
     [projectId],
   );
 
   const [selected, setSelected] = useState("");
-  const [newName, setNewName] = useState("");
-  const [category, setCategory] = useState("");
-  const [priv, setPriv] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const linked = new Set((links.data ?? []).map((l) => l.discord_channel_id));
-  const categories = (guild.data ?? []).filter((c) => c.type === "category");
 
   async function link() {
     const ch = guild.data?.find((c) => c.channel_id === selected);
@@ -43,29 +40,6 @@ export function ChannelsSection({
       });
       setSelected("");
       links.reload();
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function create() {
-    if (!newName.trim()) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      await api.createDiscordChannel(projectId, {
-        name: newName.trim(),
-        channel_type: "text",
-        parent_id: category || null,
-        private: priv,
-        entity_id: entityId,
-        register_channel: true,
-      });
-      setNewName("");
-      links.reload();
-      guild.reload();
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -121,52 +95,24 @@ export function ChannelsSection({
         </div>
       ))}
 
-      <label style={{ marginTop: 16 }}>Привязать существующий</label>
+      <label style={{ marginTop: 16 }}>Дать доступ к каналу</label>
       <div className="row" style={{ gap: 8 }}>
         <select value={selected} style={{ flex: 1 }} onChange={(e) => setSelected(e.target.value)}>
           <option value="">— выберите канал —</option>
-          {(guild.data ?? [])
-            .filter((c) => c.type === "text" || c.type === "forum")
-            .map((c) => (
-              <option key={c.channel_id} value={c.channel_id} disabled={linked.has(c.channel_id)}>
-                {c.parent_name ? `${c.parent_name} / ` : ""}#{c.name}
-                {linked.has(c.channel_id) ? " — уже привязан" : ""}
-              </option>
-            ))}
+          {(guild.data ?? []).map((c) => (
+            <option key={c.channel_id} value={c.channel_id} disabled={linked.has(c.channel_id)}>
+              {c.parent_name ? `${c.parent_name} / ` : ""}#{c.name}
+              {linked.has(c.channel_id) ? " — уже привязан" : ""}
+            </option>
+          ))}
         </select>
         <button className="ghost" onClick={link} disabled={busy || !selected}>
           Привязать
         </button>
       </div>
-
-      <label style={{ marginTop: 16 }}>Создать новый канал</label>
-      <div className="row" style={{ gap: 8 }}>
-        <input
-          value={newName}
-          placeholder="название канала"
-          onChange={(e) => setNewName(e.target.value)}
-        />
-        <select value={category} style={{ width: 200 }} onChange={(e) => setCategory(e.target.value)}>
-          <option value="">— без категории —</option>
-          {categories.map((c) => (
-            <option key={c.channel_id} value={c.channel_id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <label className="row" style={{ margin: 0, fontSize: 13 }}>
-          <input
-            type="checkbox"
-            checked={priv}
-            style={{ width: "auto", marginRight: 6 }}
-            onChange={(e) => setPriv(e.target.checked)}
-          />
-          приватный
-        </label>
-        <button className="primary" onClick={create} disabled={busy || !newName.trim()}>
-          Создать
-        </button>
-      </div>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Список — каналы категорий проекта. Новые каналы создаются во вкладке «Каналы».
+      </p>
 
       {err && <div className="error">{err}</div>}
     </section>

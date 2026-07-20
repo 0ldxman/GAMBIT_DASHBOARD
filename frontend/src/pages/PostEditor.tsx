@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { DiscordPreview } from "../components/DiscordPreview";
@@ -26,6 +26,9 @@ export function PostEditorPage() {
   const pid = Number(projectId);
   const isNew = postId === "new";
   const navigate = useNavigate();
+  // ?entity=<id> — верд открыт кнопкой «Написать верд» с экрана сущности.
+  const [searchParams] = useSearchParams();
+  const presetEntityId = Number(searchParams.get("entity")) || null;
 
   const existing = useAsync<Post | null>(
     () => (isNew ? Promise.resolve(null) : api.getPost(pid, Number(postId))),
@@ -58,6 +61,8 @@ export function PostEditorPage() {
 
   useEffect(() => {
     if (isNew) {
+      // Сущность уже выбрана — сразу заводим для неё пустой блок правок.
+      if (presetEntityId) setEdits([{ entity_id: presetEntityId, ops: [] }]);
       setLoaded(true);
       return;
     }

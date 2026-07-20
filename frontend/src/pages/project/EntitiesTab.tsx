@@ -1,18 +1,26 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
 import { MembersSummary } from "../../components/PlayerBadge";
-import type { Entity, EntityType } from "../../types";
+import { PingBell } from "../../components/PingBell";
+import type { Entity, EntityPingCount, EntityType } from "../../types";
 
 export function EntitiesTab({ projectId }: { projectId: number }) {
   const entities = useAsync<Entity[]>(() => api.listEntities(projectId), [projectId]);
   const types = useAsync<EntityType[]>(() => api.listTypes(projectId), [projectId]);
+  const pings = useAsync<EntityPingCount[]>(
+    () => api.entityPingCounts(projectId).catch(() => []),
+    [projectId],
+  );
   const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
 
   const typeName = (id: number | null) =>
     types.data?.find((t) => t.id === id)?.label ?? "—";
+  const pingsFor = (id: number) =>
+    pings.data?.find((p) => p.entity_id === id)?.unread ?? 0;
 
   return (
     <div>
@@ -41,12 +49,21 @@ export function EntitiesTab({ projectId }: { projectId: number }) {
               <tr key={e.id}>
                 <td>
                   <Link to={`/projects/${projectId}/entities/${e.id}`}>{e.label}</Link>
+                  <PingBell count={pingsFor(e.id)} />
                 </td>
                 <td className="muted">{typeName(e.type_id)}</td>
                 <td>
                   <MembersSummary members={e.members} />
                 </td>
                 <td style={{ textAlign: "right" }}>
+                  <button
+                    className="ghost"
+                    onClick={() =>
+                      navigate(`/projects/${projectId}/posts/new?entity=${e.id}`)
+                    }
+                  >
+                    Написать верд
+                  </button>
                   <button
                     className="ghost danger"
                     onClick={async () => {

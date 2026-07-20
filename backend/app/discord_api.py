@@ -85,6 +85,28 @@ def avatar_url(user_id: int, avatar_hash: Optional[str], discriminator: str = "0
     return f"https://cdn.discordapp.com/embed/avatars/{index}.png"
 
 
+def guild_icon_url(guild_id: int, icon_hash: Optional[str]) -> Optional[str]:
+    if not icon_hash:
+        return None
+    ext = "gif" if icon_hash.startswith("a_") else "png"
+    return f"https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.{ext}?size=128"
+
+
+async def list_bot_guilds() -> list[dict[str, Any]]:
+    """Серверы, на которых стоит бот. Мастер выбирает сервер, а не вводит guild_id."""
+    raw = await _get("/users/@me/guilds")
+    guilds = [
+        {
+            "guild_id": str(g["id"]),
+            "name": g.get("name", ""),
+            "icon_url": guild_icon_url(int(g["id"]), g.get("icon")),
+        }
+        for g in raw
+    ]
+    guilds.sort(key=lambda g: g["name"].lower())
+    return guilds
+
+
 async def list_guild_channels(guild_id: int) -> list[dict[str, Any]]:
     """Каналы сервера, отсортированные и с именем категории-родителя."""
     raw = await _get(f"/guilds/{guild_id}/channels")
@@ -195,6 +217,11 @@ async def get_channel(channel_id: int) -> dict[str, Any]:
         "parent_id": str(data["parent_id"]) if data.get("parent_id") else None,
         "guild_id": str(data["guild_id"]) if data.get("guild_id") else None,
     }
+
+
+async def delete_channel(channel_id: int) -> None:
+    """Удалить канал в Discord. Необратимо — вызывать только по явному подтверждению."""
+    await _request("DELETE", f"/channels/{channel_id}")
 
 
 async def list_channel_overwrites(channel_id: int) -> list[dict[str, Any]]:

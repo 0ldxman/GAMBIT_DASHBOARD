@@ -9,9 +9,11 @@ import "./styles.css";
 import { AuthProvider, useAuth } from "./auth";
 import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
-import { Projects } from "./pages/Projects";
+import { Servers } from "./pages/Servers";
+import { ServerPage } from "./pages/Server";
 import { ProjectPage } from "./pages/Project";
 import { EntityPage } from "./pages/Entity";
+import { EntityTypeEditorPage } from "./pages/EntityTypeEditor";
 import { PostEditorPage } from "./pages/PostEditor";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -30,9 +32,11 @@ const router = createBrowserRouter([
       </RequireAuth>
     ),
     children: [
-      { index: true, element: <Projects /> },
+      { index: true, element: <Servers /> },
+      { path: "servers/:guildId", element: <ServerPage /> },
       { path: "projects/:projectId", element: <ProjectPage /> },
       { path: "projects/:projectId/entities/:entityId", element: <EntityPage /> },
+      { path: "projects/:projectId/types/:typeId", element: <EntityTypeEditorPage /> },
       { path: "projects/:projectId/posts/:postId", element: <PostEditorPage /> },
     ],
   },

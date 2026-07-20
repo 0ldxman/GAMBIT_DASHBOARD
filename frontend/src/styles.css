@@ -132,3 +132,38 @@ th { color: var(--muted); font-weight: 500; }
 .center-screen { display: flex; align-items: center; justify-content: center; height: 100%; }
 .login-box { width: min(360px, 90vw); }
 .kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; }
+
+/* --- серверы --- */
+.server-card { display: flex; align-items: center; gap: 14px; }
+.guild-fallback {
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  border-radius: 50%; background: #5865f2; color: #fff; font-weight: 600;
+}
+.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+
+/* --- выбор категорий проекта --- */
+.category-picker {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 260px; overflow-y: auto;
+  border: 1px solid var(--border, #2b2d31); border-radius: 8px; padding: 6px;
+}
+.category-option {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px;
+  align-items: center; margin: 0; padding: 7px 8px; border-radius: 6px; cursor: pointer;
+}
+.category-option:hover { background: rgba(127, 127, 127, 0.12); }
+.category-option input { width: auto; margin: 0; }
+
+/* --- строки каналов --- */
+.channel-row { padding: 7px 0; border-top: 1px solid rgba(127, 127, 127, 0.16); }
+.channel-row:first-of-type { border-top: none; }
+
+/* --- колокольчик пингов --- */
+.ping-bell {
+  display: inline-flex; align-items: center; gap: 2px;
+  margin-left: 8px; font-size: 14px; vertical-align: middle;
+}
+.ping-count {
+  background: #f23f43; color: #fff; font-size: 11px; font-weight: 600;
+  border-radius: 10px; padding: 0 6px; line-height: 16px;
+}

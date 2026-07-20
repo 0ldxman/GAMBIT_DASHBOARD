@@ -4,9 +4,25 @@ export interface Project {
   type: string;
   desc: string;
   guild_id: string | null;
-  master_role_id: string | null;
-  player_role_id: string | null;
   created_at: string;
+}
+
+/** Уровень доступа роли внутри проекта. */
+export type AccessLevel = "admin" | "moderator" | "player";
+
+export interface ProjectRole {
+  id: number;
+  project_id: number;
+  role_id: string;
+  name: string;
+  access_level: AccessLevel;
+}
+
+/** Сервер Discord, на котором стоит бот. */
+export interface DiscordGuild {
+  guild_id: string;
+  name: string;
+  icon_url: string | null;
 }
 
 export interface Channel {
@@ -67,6 +83,43 @@ export interface DiscordChannel {
   position: number;
   parent_id: string | null;
   parent_name: string | null;
+}
+
+/** Дерево каналов проекта: категории и собранные внутри них каналы. */
+export interface EntityLink {
+  link_id: number;
+  entity_id: number;
+  entity_label: string;
+  sync_access: boolean;
+}
+
+export interface ChannelNode {
+  channel_id: string;
+  name: string;
+  type: string;
+  position: number;
+  registered_id: number | null;
+  entities: EntityLink[];
+}
+
+export interface CategoryNode {
+  id: number;
+  channel_id: string;
+  name: string;
+  missing: boolean;
+  channels: ChannelNode[];
+}
+
+export interface ChannelTree {
+  categories: CategoryNode[];
+  loose: ChannelNode[];
+  error: string | null;
+}
+
+/** Непрочитанные пинги игроков по сущности. */
+export interface EntityPingCount {
+  entity_id: number;
+  unread: number;
 }
 
 /** Профиль участника сервера Discord. */

@@ -1,17 +1,23 @@
 import type {
+  AccessLevel,
   AppNotification,
   Attachment,
   Channel,
+  ChannelTree,
   DiscordChannel,
+  DiscordGuild,
   DiscordMember,
   DiscordRole,
   Entity,
   EntityChannel,
+  EntityLink,
+  EntityPingCount,
   EntityType,
   Member,
   Relation,
   Post,
   Project,
+  ProjectRole,
   Registration,
   RegistrationForm,
   TemplatePreview,
@@ -76,16 +82,58 @@ export const api = {
   login: (password: string) =>
     request<{ access_token: string }>("POST", "/auth/login", { password }),
 
+  // серверы, где стоит бот
+  listGuilds: () => request<DiscordGuild[]>("GET", "/guilds"),
+  listGuildChannels: (guildId: string) =>
+    request<DiscordChannel[]>("GET", `/guilds/${guildId}/channels`),
+  listGuildRoles: (guildId: string) =>
+    request<DiscordRole[]>("GET", `/guilds/${guildId}/roles`),
+
   // projects
-  listProjects: () => request<Project[]>("GET", "/projects"),
+  listProjects: (guildId?: string) =>
+    request<Project[]>(
+      "GET",
+      `/projects${guildId ? `?guild_id=${guildId}` : ""}`,
+    ),
   getProject: (id: number) => request<Project>("GET", `/projects/${id}`),
-  createProject: (data: Partial<Project>) =>
+  createProject: (data: Partial<Project> & { category_ids?: string[] }) =>
     request<Project>("POST", "/projects", data),
-  updateProject: (id: number, data: Partial<Project>) =>
+  updateProject: (id: number, data: Partial<Project> & { category_ids?: string[] }) =>
     request<Project>("PATCH", `/projects/${id}`, data),
   deleteProject: (id: number) => request<void>("DELETE", `/projects/${id}`),
 
+  // категории проекта (discord id строками)
+  listCategories: (pid: number) =>
+    request<string[]>("GET", `/projects/${pid}/categories`),
+
+  // роли проекта с уровнем доступа
+  listProjectRoles: (pid: number) =>
+    request<ProjectRole[]>("GET", `/projects/${pid}/roles`),
+  addProjectRole: (
+    pid: number,
+    data: { role_id: string; name: string; access_level: AccessLevel },
+  ) => request<ProjectRole>("POST", `/projects/${pid}/roles`, data),
+  updateProjectRole: (pid: number, rid: number, data: { access_level: AccessLevel }) =>
+    request<ProjectRole>("PATCH", `/projects/${pid}/roles/${rid}`, data),
+  deleteProjectRole: (pid: number, rid: number) =>
+    request<void>("DELETE", `/projects/${pid}/roles/${rid}`),
+
   // channels
+  channelTree: (pid: number) =>
+    request<ChannelTree>("GET", `/projects/${pid}/channels/tree`),
+  // Единый список каналов проекта — и для экрана каналов, и для доступа сущности.
+  availableChannels: (pid: number) =>
+    request<DiscordChannel[]>("GET", `/projects/${pid}/channels/available`),
+  grantEntityChannel: (pid: number, discordChannelId: string, entityId: number) =>
+    request<EntityLink>(
+      "POST",
+      `/projects/${pid}/channels/${discordChannelId}/entities/${entityId}`,
+    ),
+  revokeEntityChannel: (pid: number, discordChannelId: string, entityId: number) =>
+    request<void>(
+      "DELETE",
+      `/projects/${pid}/channels/${discordChannelId}/entities/${entityId}`,
+    ),
   listChannels: (pid: number) =>
     request<Channel[]>("GET", `/projects/${pid}/channels`),
   createChannel: (pid: number, data: Partial<Channel>) =>
@@ -232,6 +280,9 @@ export const api = {
       register_channel: boolean;
     },
   ) => request<DiscordChannel>("POST", `/projects/${pid}/discord/channels`, data),
+  // Необратимо: удаляет канал на сервере вместе с историей.
+  deleteDiscordChannel: (pid: number, channelId: string) =>
+    request<void>("DELETE", `/projects/${pid}/discord/channels/${channelId}`),
 
   // forms (регистрационные формы)
   listForms: (pid: number) =>
@@ -263,6 +314,8 @@ export const api = {
       "GET",
       `/projects/${pid}/notifications${unreadOnly ? "?unread_only=true" : ""}`,
     ),
+  entityPingCounts: (pid: number) =>
+    request<EntityPingCount[]>("GET", `/projects/${pid}/notifications/entity-counts`),
   markNotificationRead: (pid: number, nid: number) =>
     request<AppNotification>("POST", `/projects/${pid}/notifications/${nid}/read`),
   markAllNotificationsRead: (pid: number) =>

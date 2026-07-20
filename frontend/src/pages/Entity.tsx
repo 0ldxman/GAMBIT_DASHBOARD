@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
-import type { Entity, EntityType, TemplatePreview } from "../types";
+import { PingBell } from "../components/PingBell";
+import type { Entity, EntityPingCount, EntityType, TemplatePreview } from "../types";
 import { MembersSection } from "./entity/MembersSection";
 import { RelationsSection } from "./entity/RelationsSection";
 import { ChannelsSection } from "./entity/ChannelsSection";
@@ -65,6 +66,12 @@ export function EntityPage() {
   const types = useAsync<EntityType[]>(() => api.listTypes(pid), [pid]);
   // Список сущностей проекта нужен для выбора второй стороны связи.
   const allEntities = useAsync<Entity[]>(() => api.listEntities(pid), [pid]);
+  const pings = useAsync<EntityPingCount[]>(
+    () => api.entityPingCounts(pid).catch(() => []),
+    [pid],
+  );
+  const navigate = useNavigate();
+  const pingCount = pings.data?.find((p) => p.entity_id === eid)?.unread ?? 0;
 
   const [label, setLabel] = useState("");
   const [picture, setPicture] = useState("");
@@ -167,10 +174,21 @@ export function EntityPage() {
       </div>
 
       <div className="row spread">
-        <h1>{label || "Сущность"}</h1>
-        <button className="primary" disabled={saving} onClick={save}>
-          {saving ? "Сохранение…" : "Сохранить"}
-        </button>
+        <h1>
+          {label || "Сущность"}
+          <PingBell count={pingCount} />
+        </h1>
+        <div className="row" style={{ gap: 8 }}>
+          <button
+            className="ghost"
+            onClick={() => navigate(`/projects/${pid}/posts/new?entity=${eid}`)}
+          >
+            Написать верд
+          </button>
+          <button className="primary" disabled={saving} onClick={save}>
+            {saving ? "Сохранение…" : "Сохранить"}
+          </button>
+        </div>
       </div>
       {msg && <div className={msg === "Сохранено" ? "muted" : "error"}>{msg}</div>}
 

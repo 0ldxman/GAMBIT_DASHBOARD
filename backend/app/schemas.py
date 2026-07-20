@@ -9,6 +9,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from app.fields import DiscordId
+from app.models import AccessLevel
 from app.models import NotificationType
 from app.models import PostStatus
 from app.models import RegistrationStatus
@@ -29,17 +30,13 @@ class TokenResponse(BaseModel):
 
 
 # ---------- project ----------
-class ProjectBase(BaseModel):
+class ProjectCreate(BaseModel):
     label: str
     type: str = ""
     desc: str = ""
     guild_id: Optional[DiscordId] = None
-    master_role_id: Optional[DiscordId] = None
-    player_role_id: Optional[DiscordId] = None
-
-
-class ProjectCreate(ProjectBase):
-    pass
+    # Категории сервера, которыми владеет проект. Всё внутри них — его каналы.
+    category_ids: list[DiscordId] = Field(default_factory=list)
 
 
 class ProjectUpdate(BaseModel):
@@ -47,8 +44,8 @@ class ProjectUpdate(BaseModel):
     type: Optional[str] = None
     desc: Optional[str] = None
     guild_id: Optional[DiscordId] = None
-    master_role_id: Optional[DiscordId] = None
-    player_role_id: Optional[DiscordId] = None
+    # Полная замена списка категорий; None — не трогать.
+    category_ids: Optional[list[DiscordId]] = None
 
 
 class ProjectOut(ORMModel):
@@ -57,9 +54,26 @@ class ProjectOut(ORMModel):
     type: str
     desc: str
     guild_id: Optional[DiscordId]
-    master_role_id: Optional[DiscordId]
-    player_role_id: Optional[DiscordId]
     created_at: datetime
+
+
+# ---------- роли проекта ----------
+class ProjectRoleOut(ORMModel):
+    id: int
+    project_id: int
+    role_id: DiscordId
+    name: str
+    access_level: AccessLevel
+
+
+class ProjectRoleCreate(BaseModel):
+    role_id: DiscordId
+    name: str = ""
+    access_level: AccessLevel = AccessLevel.player
+
+
+class ProjectRoleUpdate(BaseModel):
+    access_level: Optional[AccessLevel] = None
 
 
 # ---------- channel ----------
@@ -200,6 +214,12 @@ class EntityOut(ORMModel):
 
 
 # ---------- discord справочники ----------
+class DiscordGuildOut(BaseModel):
+    guild_id: str
+    name: str
+    icon_url: Optional[str] = None
+
+
 class DiscordChannelOut(BaseModel):
     channel_id: str  # snowflake строкой
     name: str
@@ -229,6 +249,43 @@ class DiscordMemberOut(BaseModel):
     player_id: str
     name: str
     avatar_url: str
+
+
+# ---------- дерево каналов проекта ----------
+class EntityLinkOut(BaseModel):
+    """Какая сущность имеет доступ к каналу (для экрана канала)."""
+
+    link_id: int
+    entity_id: int
+    entity_label: str
+    sync_access: bool
+
+
+class ChannelNodeOut(BaseModel):
+    channel_id: str
+    name: str
+    type: str
+    position: int
+    # id строки project_channel, если канал зарегистрирован в проекте отдельно.
+    registered_id: Optional[int] = None
+    entities: list[EntityLinkOut] = Field(default_factory=list)
+
+
+class CategoryNodeOut(BaseModel):
+    id: int  # project_channel.id самой категории
+    channel_id: str
+    name: str
+    # Категории уже нет на сервере — её удалили в Discord мимо дашборда.
+    missing: bool = False
+    channels: list[ChannelNodeOut] = Field(default_factory=list)
+
+
+class ChannelTreeOut(BaseModel):
+    categories: list[CategoryNodeOut] = Field(default_factory=list)
+    # Каналы, зарегистрированные явно, но лежащие вне категорий проекта.
+    loose: list[ChannelNodeOut] = Field(default_factory=list)
+    # Discord недоступен — дерево строится только из того, что знает БД.
+    error: Optional[str] = None
 
 
 # ---------- template preview ----------
@@ -419,6 +476,13 @@ class NotificationOut(ORMModel):
     discord_channel_id: Optional[DiscordId]
     is_read: bool
     created_at: datetime
+
+
+class EntityPingCount(BaseModel):
+    """Сколько непрочитанных пингов пришло по сущности — для колокольчика в списке."""
+
+    entity_id: int
+    unread: int
 
 
 # ---------- internal (bot) ----------

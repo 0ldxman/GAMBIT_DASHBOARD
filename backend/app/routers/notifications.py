@@ -3,12 +3,15 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Notification
+from app.models import NotificationType
 from app.routers.projects import get_project_or_404
+from app.schemas import EntityPingCount
 from app.schemas import NotificationOut
 from app.security import require_master
 
@@ -32,6 +35,25 @@ async def list_notifications(
     query = query.order_by(Notification.created_at.desc())
     result = await db.execute(query)
     return list(result.scalars().all())
+
+
+@router.get("/entity-counts", response_model=list[EntityPingCount])
+async def entity_ping_counts(
+    project_id: int, db: AsyncSession = Depends(get_db)
+) -> list[EntityPingCount]:
+    """Непрочитанные пинги в разрезе сущностей — для колокольчика в списке."""
+    await get_project_or_404(project_id, db)
+    result = await db.execute(
+        select(Notification.entity_id, func.count())
+        .where(
+            Notification.project_id == project_id,
+            Notification.type == NotificationType.ping,
+            Notification.is_read.is_(False),
+            Notification.entity_id.isnot(None),
+        )
+        .group_by(Notification.entity_id)
+    )
+    return [EntityPingCount(entity_id=eid, unread=count) for eid, count in result.all()]
 
 
 @router.post("/{notification_id}/read", response_model=NotificationOut)

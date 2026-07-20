@@ -2,144 +2,298 @@ import { useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
-import type { Channel, DiscordChannel } from "../../types";
+import type { CategoryNode, ChannelNode, Entity, ChannelTree } from "../../types";
 
 const TYPE_ICON: Record<string, string> = {
   text: "#",
   voice: "🔊",
-  category: "📁",
   news: "📢",
   forum: "💬",
   stage: "🎤",
 };
 
+/** Каналы проекта: категории одна за другой, каналы внутри собираются из Discord. */
 export function ChannelsTab({ projectId }: { projectId: number }) {
-  const channels = useAsync<Channel[]>(() => api.listChannels(projectId), [projectId]);
-  const [adding, setAdding] = useState(false);
+  const tree = useAsync<ChannelTree>(() => api.channelTree(projectId), [projectId]);
+  const entities = useAsync<Entity[]>(() => api.listEntities(projectId), [projectId]);
+  const [creatingIn, setCreatingIn] = useState<CategoryNode | null>(null);
+  const [access, setAccess] = useState<ChannelNode | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function removeChannel(ch: ChannelNode) {
+    const ok = confirm(
+      `Удалить канал #${ch.name} в Discord?\n\n` +
+        "Канал и вся его история пропадут на сервере. Отменить нельзя.",
+    );
+    if (!ok) return;
+    setErr(null);
+    try {
+      await api.deleteDiscordChannel(projectId, ch.channel_id);
+      tree.reload();
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
 
   return (
     <div>
       <div className="row spread">
-        <h2 style={{ border: "none" }}>Каналы и категории</h2>
-        <button className="primary" onClick={() => setAdding(true)}>
-          + Канал
+        <h2 style={{ border: "none" }}>Каналы</h2>
+        <button className="ghost" onClick={() => tree.reload()}>
+          Обновить
         </button>
       </div>
+      <p className="muted">
+        Каналы не хранятся в дашборде — состав категорий всегда берётся с сервера.
+        Категории проекта настраиваются во вкладке «Настройки».
+      </p>
 
-      {channels.loading && <p className="muted">Загрузка…</p>}
-      {channels.error && <p className="error">{channels.error}</p>}
-
-      {channels.data && channels.data.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Канал</th>
-              <th>Discord ID</th>
-              <th>Тип</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {channels.data.map((c) => (
-              <tr key={c.id}>
-                <td>
-                  {TYPE_ICON[c.channel_type] ?? "#"} {c.label || <span className="muted">без названия</span>}
-                </td>
-                <td className="muted" style={{ fontFamily: "ui-monospace, monospace" }}>
-                  {c.channel_id}
-                </td>
-                <td className="muted">{c.channel_type || "—"}</td>
-                <td style={{ textAlign: "right" }}>
-                  <button
-                    className="ghost danger"
-                    onClick={async () => {
-                      if (confirm("Удалить канал?")) {
-                        await api.deleteChannel(projectId, c.id);
-                        channels.reload();
-                      }
-                    }}
-                  >
-                    Удалить
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {tree.loading && <p className="muted">Загрузка…</p>}
+      {tree.data?.error && <div className="error">{tree.data.error}</div>}
+      {err && <div className="error">{err}</div>}
+      {tree.data?.categories.length === 0 && !tree.data.error && (
+        <p className="muted">
+          У проекта нет категорий. Добавьте их во вкладке «Настройки».
+        </p>
       )}
-      {channels.data?.length === 0 && <p className="muted">Каналов пока нет.</p>}
 
-      {adding && (
-        <AddChannelModal
+      {tree.data?.categories.map((cat) => (
+        <section className="card" key={cat.id} style={{ marginTop: 16 }}>
+          <div className="row spread">
+            <h3 style={{ margin: 0 }}>
+              📁 {cat.name}
+              {cat.missing && (
+                <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>
+                  — категории больше нет на сервере
+                </span>
+              )}
+            </h3>
+            {!cat.missing && (
+              <button className="ghost" title="Создать канал" onClick={() => setCreatingIn(cat)}>
+                +
+              </button>
+            )}
+          </div>
+
+          {cat.channels.length === 0 && !cat.missing && (
+            <p className="muted">В категории нет каналов.</p>
+          )}
+
+          {cat.channels.map((ch) => (
+            <ChannelRow
+              key={ch.channel_id}
+              channel={ch}
+              onAccess={() => setAccess(ch)}
+              onDelete={() => removeChannel(ch)}
+            />
+          ))}
+        </section>
+      ))}
+
+      {tree.data && tree.data.loose.length > 0 && (
+        <section className="card" style={{ marginTop: 16 }}>
+          <h3 style={{ marginTop: 0 }}>Вне категорий проекта</h3>
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+            Каналы, привязанные к проекту отдельно.
+          </p>
+          {tree.data.loose.map((ch) => (
+            <ChannelRow
+              key={ch.channel_id}
+              channel={ch}
+              onAccess={() => setAccess(ch)}
+              onDelete={() => removeChannel(ch)}
+            />
+          ))}
+        </section>
+      )}
+
+      {creatingIn && (
+        <CreateChannelModal
           projectId={projectId}
-          existing={channels.data ?? []}
-          onClose={() => setAdding(false)}
-          onAdded={() => {
-            setAdding(false);
-            channels.reload();
+          category={creatingIn}
+          onClose={() => setCreatingIn(null)}
+          onCreated={() => {
+            setCreatingIn(null);
+            tree.reload();
           }}
+        />
+      )}
+
+      {access && (
+        <AccessModal
+          projectId={projectId}
+          channel={access}
+          entities={entities.data ?? []}
+          onClose={() => setAccess(null)}
+          onChanged={() => tree.reload()}
         />
       )}
     </div>
   );
 }
 
-function AddChannelModal({
+function ChannelRow({
+  channel,
+  onAccess,
+  onDelete,
+}: {
+  channel: ChannelNode;
+  onAccess: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="row spread channel-row">
+      <span>
+        {TYPE_ICON[channel.type] ?? "#"} {channel.name}
+        {channel.entities.length > 0 && (
+          <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>
+            доступ: {channel.entities.map((e) => e.entity_label).join(", ")}
+          </span>
+        )}
+      </span>
+      <div className="row" style={{ gap: 6 }}>
+        <button className="ghost" onClick={onAccess}>
+          Доступ
+        </button>
+        <button className="ghost danger" onClick={onDelete}>
+          Удалить
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Выдача доступа сущностям — тот же набор каналов, что и на экране сущности. */
+function AccessModal({
   projectId,
-  existing,
+  channel,
+  entities,
   onClose,
-  onAdded,
+  onChanged,
 }: {
   projectId: number;
-  existing: Channel[];
+  channel: ChannelNode;
+  entities: Entity[];
   onClose: () => void;
-  onAdded: () => void;
+  onChanged: () => void;
 }) {
-  // Список каналов сервера тянем через бота/Discord API.
-  const guild = useAsync<DiscordChannel[]>(
-    () => api.listDiscordChannels(projectId),
-    [projectId],
-  );
-  const [manual, setManual] = useState(false);
-  const [selected, setSelected] = useState<string>("");
-  const [manualId, setManualId] = useState("");
-  const [manualLabel, setManualLabel] = useState("");
-  const [manualType, setManualType] = useState("text");
+  const [links, setLinks] = useState(channel.entities);
+  const [entityId, setEntityId] = useState<number | "">("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const alreadyAdded = new Set(existing.map((c) => c.channel_id));
+  const linked = new Set(links.map((l) => l.entity_id));
+
+  async function grant() {
+    if (entityId === "") return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const link = await api.grantEntityChannel(projectId, channel.channel_id, Number(entityId));
+      setLinks([...links, link]);
+      setEntityId("");
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(entity_id: number) {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.revokeEntityChannel(projectId, channel.channel_id, entity_id);
+      setLinks(links.filter((l) => l.entity_id !== entity_id));
+      onChanged();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Доступ к #${channel.name}`} onClose={onClose}>
+      <div className="stack">
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+          Канал видят игроки всех связанных сущностей. Игрок теряет доступ, только если
+          не остался участником ни одной из них.
+        </p>
+
+        {links.length === 0 && <p className="muted">Сущностей не привязано.</p>}
+        {links.map((l) => (
+          <div className="row spread" key={l.link_id}>
+            <span>{l.entity_label}</span>
+            <button className="ghost danger" disabled={busy} onClick={() => revoke(l.entity_id)}>
+              ✕
+            </button>
+          </div>
+        ))}
+
+        <div className="row" style={{ gap: 8 }}>
+          <select
+            value={entityId}
+            style={{ flex: 1 }}
+            onChange={(e) => setEntityId(e.target.value ? Number(e.target.value) : "")}
+          >
+            <option value="">— добавить сущность —</option>
+            {entities.map((e) => (
+              <option key={e.id} value={e.id} disabled={linked.has(e.id)}>
+                {e.label}
+                {linked.has(e.id) ? " — уже есть" : ""}
+              </option>
+            ))}
+          </select>
+          <button className="primary" onClick={grant} disabled={busy || entityId === ""}>
+            Дать доступ
+          </button>
+        </div>
+
+        {err && <div className="error">{err}</div>}
+        <div className="row spread">
+          <span />
+          <button className="ghost" onClick={onClose}>
+            Закрыть
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function CreateChannelModal({
+  projectId,
+  category,
+  onClose,
+  onCreated,
+}: {
+  projectId: number;
+  category: CategoryNode;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [channelType, setChannelType] = useState("text");
+  const [priv, setPriv] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   async function save() {
     setBusy(true);
     setErr(null);
     try {
-      if (manual) {
-        if (!/^\d+$/.test(manualId)) {
-          setErr("Discord channel_id должен быть числом");
-          setBusy(false);
-          return;
-        }
-        await api.createChannel(projectId, {
-          channel_id: manualId,
-          channel_type: manualType,
-          label: manualLabel,
-        });
-      } else {
-        const ch = guild.data?.find((c) => c.channel_id === selected);
-        if (!ch) {
-          setErr("Выберите канал");
-          setBusy(false);
-          return;
-        }
-        // Имя канала сохраняем в label — чтобы показывать его в списке.
-        await api.createChannel(projectId, {
-          channel_id: ch.channel_id,
-          channel_type: ch.type,
-          label: ch.name,
-        });
-      }
-      onAdded();
+      await api.createDiscordChannel(projectId, {
+        name: name.trim(),
+        channel_type: channelType,
+        parent_id: category.channel_id,
+        private: priv,
+        entity_id: null,
+        // Канал и так внутри категории проекта — отдельная регистрация лишняя.
+        register_channel: false,
+      });
+      onCreated();
     } catch (e) {
       setErr(String(e));
       setBusy(false);
@@ -147,83 +301,37 @@ function AddChannelModal({
   }
 
   return (
-    <Modal title="Привязать Discord-канал" onClose={onClose}>
+    <Modal title={`Новый канал в «${category.name}»`} onClose={onClose}>
       <div className="stack">
-        {!manual && (
-          <>
-            {guild.loading && <p className="muted">Загружаю каналы сервера…</p>}
-            {guild.error && (
-              <div className="stack">
-                <div className="error">{guild.error}</div>
-                <p className="muted">
-                  Проверьте, что у проекта задан Discord server (guild_id), бот приглашён на сервер,
-                  а у backend есть DISCORD_BOT_TOKEN.
-                </p>
-              </div>
-            )}
-            {guild.data && (
-              <div>
-                <label>Канал сервера</label>
-                <select
-                  size={10}
-                  value={selected}
-                  style={{ height: "auto" }}
-                  onChange={(e) => setSelected(e.target.value)}
-                >
-                  {guild.data.map((c) => (
-                    <option
-                      key={c.channel_id}
-                      value={c.channel_id}
-                      disabled={alreadyAdded.has(c.channel_id)}
-                    >
-                      {c.parent_name ? `${c.parent_name} / ` : ""}
-                      {TYPE_ICON[c.type] ?? "#"} {c.name}
-                      {alreadyAdded.has(c.channel_id) ? " — уже добавлен" : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </>
-        )}
-
-        {manual && (
-          <>
-            <div>
-              <label>Название (для удобства)</label>
-              <input value={manualLabel} onChange={(e) => setManualLabel(e.target.value)} />
-            </div>
-            <div>
-              <label>Discord channel_id</label>
-              <input value={manualId} onChange={(e) => setManualId(e.target.value)} />
-            </div>
-            <div>
-              <label>Тип</label>
-              <select value={manualType} onChange={(e) => setManualType(e.target.value)}>
-                <option value="text">text</option>
-                <option value="category">category</option>
-                <option value="forum">forum</option>
-                <option value="news">news</option>
-              </select>
-            </div>
-          </>
-        )}
-
-        <button className="ghost" onClick={() => setManual(!manual)}>
-          {manual ? "← Выбрать из списка сервера" : "Ввести ID вручную →"}
-        </button>
-
+        <div>
+          <label>Название</label>
+          <input value={name} autoFocus onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <label>Тип</label>
+          <select value={channelType} onChange={(e) => setChannelType(e.target.value)}>
+            <option value="text">текстовый</option>
+            <option value="voice">голосовой</option>
+            <option value="forum">форум</option>
+            <option value="news">новостной</option>
+          </select>
+        </div>
+        <label className="row" style={{ margin: 0, fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={priv}
+            style={{ width: "auto", marginRight: 8 }}
+            onChange={(e) => setPriv(e.target.checked)}
+          />
+          приватный — закрыт от @everyone, открыт мастерским ролям
+        </label>
         {err && <div className="error">{err}</div>}
         <div className="row spread">
           <button className="ghost" onClick={onClose}>
             Отмена
           </button>
-          <button
-            className="primary"
-            disabled={busy || (manual ? !manualId : !selected)}
-            onClick={save}
-          >
-            Привязать
+          <button className="primary" disabled={busy || !name.trim()} onClick={save}>
+            Создать
           </button>
         </div>
       </div>

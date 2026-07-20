@@ -6,9 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.discord_api import DiscordError
+from app.discord_api import list_guild_channels
 from app.models import Project
+from app.models import ProjectChannel
+from app.models import ProjectRole
 from app.schemas import ProjectCreate
 from app.schemas import ProjectOut
+from app.schemas import ProjectRoleCreate
+from app.schemas import ProjectRoleOut
+from app.schemas import ProjectRoleUpdate
 from app.schemas import ProjectUpdate
 from app.security import require_master
 
@@ -22,16 +29,73 @@ async def get_project_or_404(project_id: int, db: AsyncSession) -> Project:
     return project
 
 
+async def _category_names(guild_id: int | None, ids: list[int]) -> dict[int, str]:
+    """Имена категорий с сервера. Discord недоступен — обойдёмся без имён."""
+    if not guild_id or not ids:
+        return {}
+    try:
+        channels = await list_guild_channels(guild_id)
+    except DiscordError:
+        return {}
+    wanted = set(ids)
+    return {
+        int(c["channel_id"]): c["name"]
+        for c in channels
+        if int(c["channel_id"]) in wanted
+    }
+
+
+async def _set_categories(project: Project, category_ids: list[int], db: AsyncSession) -> None:
+    """Привести набор категорий проекта к указанному.
+
+    Категории живут в project_channel с channel_type='category'. Обычные каналы,
+    зарегистрированные отдельно, не трогаем.
+    """
+    result = await db.execute(
+        select(ProjectChannel).where(
+            ProjectChannel.project_id == project.id,
+            ProjectChannel.channel_type == "category",
+        )
+    )
+    current = {c.channel_id: c for c in result.scalars().all()}
+    wanted = set(category_ids)
+
+    for channel_id, row in current.items():
+        if channel_id not in wanted:
+            await db.delete(row)
+
+    new_ids = [cid for cid in wanted if cid not in current]
+    names = await _category_names(project.guild_id, new_ids)
+    for channel_id in new_ids:
+        db.add(
+            ProjectChannel(
+                project_id=project.id,
+                channel_id=channel_id,
+                channel_type="category",
+                label=names.get(channel_id, ""),
+            )
+        )
+
+
 @router.get("", response_model=list[ProjectOut])
-async def list_projects(db: AsyncSession = Depends(get_db)) -> list[Project]:
-    result = await db.execute(select(Project).order_by(Project.created_at.desc()))
+async def list_projects(
+    guild_id: int | None = None, db: AsyncSession = Depends(get_db)
+) -> list[Project]:
+    query = select(Project)
+    if guild_id is not None:
+        query = query.where(Project.guild_id == guild_id)
+    result = await db.execute(query.order_by(Project.created_at.desc()))
     return list(result.scalars().all())
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)) -> Project:
-    project = Project(**body.model_dump())
+    data = body.model_dump()
+    category_ids = data.pop("category_ids", [])
+    project = Project(**data)
     db.add(project)
+    await db.flush()  # нужен project.id до создания категорий
+    await _set_categories(project, category_ids, db)
     await db.commit()
     await db.refresh(project)
     return project
@@ -47,8 +111,12 @@ async def update_project(
     project_id: int, body: ProjectUpdate, db: AsyncSession = Depends(get_db)
 ) -> Project:
     project = await get_project_or_404(project_id, db)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    category_ids = data.pop("category_ids", None)
+    for field, value in data.items():
         setattr(project, field, value)
+    if category_ids is not None:
+        await _set_categories(project, category_ids, db)
     await db.commit()
     await db.refresh(project)
     return project
@@ -58,4 +126,72 @@ async def update_project(
 async def delete_project(project_id: int, db: AsyncSession = Depends(get_db)) -> None:
     project = await get_project_or_404(project_id, db)
     await db.delete(project)
+    await db.commit()
+
+
+# ---------- категории проекта ----------
+@router.get("/{project_id}/categories", response_model=list[str])
+async def list_categories(project_id: int, db: AsyncSession = Depends(get_db)) -> list[str]:
+    """Discord-id категорий проекта строками (snowflake не влезает в JS number)."""
+    await get_project_or_404(project_id, db)
+    result = await db.execute(
+        select(ProjectChannel.channel_id).where(
+            ProjectChannel.project_id == project_id,
+            ProjectChannel.channel_type == "category",
+        )
+    )
+    return [str(row[0]) for row in result.all()]
+
+
+# ---------- роли проекта ----------
+@router.get("/{project_id}/roles", response_model=list[ProjectRoleOut])
+async def list_roles(project_id: int, db: AsyncSession = Depends(get_db)) -> list[ProjectRole]:
+    await get_project_or_404(project_id, db)
+    result = await db.execute(
+        select(ProjectRole).where(ProjectRole.project_id == project_id).order_by(ProjectRole.id)
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/{project_id}/roles", response_model=ProjectRoleOut, status_code=status.HTTP_201_CREATED)
+async def add_role(
+    project_id: int, body: ProjectRoleCreate, db: AsyncSession = Depends(get_db)
+) -> ProjectRole:
+    await get_project_or_404(project_id, db)
+    existing = await db.execute(
+        select(ProjectRole).where(
+            ProjectRole.project_id == project_id, ProjectRole.role_id == body.role_id
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Эта роль уже добавлена в проект"
+        )
+    role = ProjectRole(project_id=project_id, **body.model_dump())
+    db.add(role)
+    await db.commit()
+    await db.refresh(role)
+    return role
+
+
+@router.patch("/{project_id}/roles/{role_pk}", response_model=ProjectRoleOut)
+async def update_role(
+    project_id: int, role_pk: int, body: ProjectRoleUpdate, db: AsyncSession = Depends(get_db)
+) -> ProjectRole:
+    role = await db.get(ProjectRole, role_pk)
+    if role is None or role.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Роль не найдена")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(role, field, value)
+    await db.commit()
+    await db.refresh(role)
+    return role
+
+
+@router.delete("/{project_id}/roles/{role_pk}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_role(project_id: int, role_pk: int, db: AsyncSession = Depends(get_db)) -> None:
+    role = await db.get(ProjectRole, role_pk)
+    if role is None or role.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Роль не найдена")
+    await db.delete(role)
     await db.commit()

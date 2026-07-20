@@ -14,6 +14,7 @@ from app.routers import discord
 from app.routers import entities
 from app.routers import entity_types
 from app.routers import forms
+from app.routers import guilds
 from app.routers import internal
 from app.routers import notifications
 from app.routers import posts
@@ -46,6 +47,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(guilds.router)
 app.include_router(projects.router)
 app.include_router(channels.router)
 app.include_router(discord.router)
