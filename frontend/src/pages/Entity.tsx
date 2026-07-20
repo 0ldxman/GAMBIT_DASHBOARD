@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { PingBell } from "../components/PingBell";
+import { JsonEditor } from "../components/JsonEditor";
 import type { Entity, EntityPingCount, EntityType, TemplatePreview } from "../types";
 import { MembersSection } from "./entity/MembersSection";
 import { RelationsSection } from "./entity/RelationsSection";
@@ -173,11 +174,22 @@ export function EntityPage() {
         {entity.data?.label}
       </div>
 
-      <div className="row spread">
-        <h1>
-          {label || "Сущность"}
-          <PingBell count={pingCount} />
-        </h1>
+      <header className="page-header">
+        {picture && <img className="entity-picture" src={picture} alt="" />}
+        <div className="page-header-text">
+          <h1>
+            {label || "Сущность"}
+            <PingBell count={pingCount} />
+          </h1>
+          <p className="muted">
+            {types.data?.find((t) => t.id === typeId)?.label ?? "без типа"}
+            {entity.data?.members.length
+              ? ` · ${entity.data.members.length} ${
+                  entity.data.members.length === 1 ? "игрок" : "игроков"
+                }`
+              : ""}
+          </p>
+        </div>
         <div className="row" style={{ gap: 8 }}>
           <button
             className="ghost"
@@ -189,38 +201,41 @@ export function EntityPage() {
             {saving ? "Сохранение…" : "Сохранить"}
           </button>
         </div>
-      </div>
+      </header>
       {msg && <div className={msg === "Сохранено" ? "muted" : "error"}>{msg}</div>}
 
-      <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 460px", minWidth: 320 }}>
-          <div>
-            <label>Название</label>
-            <input value={label} onChange={(e) => setLabel(e.target.value)} />
-          </div>
-          <div className="row" style={{ gap: 12 }}>
-            <div style={{ flex: 1 }}>
-              <label>Тип</label>
-              <select
-                value={typeId ?? ""}
-                onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">— без типа —</option>
-                {types.data?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+      <div className="entity-layout">
+        <div className="stack">
+          <section className="card">
+            <h3 style={{ marginTop: 0 }}>Основное</h3>
+            <div>
+              <label>Название</label>
+              <input value={label} onChange={(e) => setLabel(e.target.value)} />
             </div>
-            <div style={{ flex: 1 }}>
-              <label>Картинка (URL)</label>
-              <input value={picture} onChange={(e) => setPicture(e.target.value)} />
+            <div className="row" style={{ gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label>Тип</label>
+                <select
+                  value={typeId ?? ""}
+                  onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">— без типа —</option>
+                  {types.data?.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>Картинка (URL)</label>
+                <input value={picture} onChange={(e) => setPicture(e.target.value)} />
+              </div>
             </div>
-          </div>
+          </section>
 
           {/* --- атрибуты --- */}
-          <div className="section">
+          <section className="card">
             <div className="row spread">
               <label style={{ margin: 0 }}>Атрибуты</label>
               <div className="row" style={{ gap: 6 }}>
@@ -273,14 +288,14 @@ export function EntityPage() {
               <>
                 <p className="muted" style={{ fontSize: 13 }}>
                   Полный JSON атрибутов — удобно для глубокой вложенности и списков.
+                  Tab — отступ, Shift+Tab — снять, Escape затем Tab — выйти из поля.
                 </p>
-                <textarea
+                <JsonEditor
                   value={jsonText}
-                  style={{ minHeight: 260 }}
-                  onChange={(e) => {
-                    setJsonText(e.target.value);
+                  onChange={(v) => {
+                    setJsonText(v);
                     try {
-                      JSON.parse(e.target.value || "{}");
+                      JSON.parse(v || "{}");
                       setJsonError(null);
                     } catch (err) {
                       setJsonError(String(err));
@@ -290,11 +305,16 @@ export function EntityPage() {
                 {jsonError && <div className="error">{jsonError}</div>}
               </>
             )}
-          </div>
+          </section>
+
+          {/* --- игроки, связи и каналы: сохраняются сразу, отдельно от полей выше --- */}
+          <MembersSection projectId={pid} entityId={eid} onChanged={() => entity.reload()} />
+          <RelationsSection projectId={pid} entityId={eid} entities={allEntities.data ?? []} />
+          <ChannelsSection projectId={pid} entityId={eid} />
         </div>
 
         {/* --- предпросмотр --- */}
-        <div style={{ flex: "1 1 320px", minWidth: 280, position: "sticky", top: 16 }}>
+        <aside className="entity-aside">
           <label>Предпросмотр embed (как в Discord /me-info)</label>
           {!template && <p className="muted">У типа нет шаблона.</p>}
           {preview?.error ? (
@@ -302,14 +322,7 @@ export function EntityPage() {
           ) : (
             <div className="embed-preview">{preview?.rendered || " "}</div>
           )}
-        </div>
-      </div>
-
-      {/* --- игроки, связи и каналы: сохраняются сразу, отдельно от полей выше --- */}
-      <div className="stack" style={{ marginTop: 24 }}>
-        <MembersSection projectId={pid} entityId={eid} onChanged={() => entity.reload()} />
-        <RelationsSection projectId={pid} entityId={eid} entities={allEntities.data ?? []} />
-        <ChannelsSection projectId={pid} entityId={eid} />
+        </aside>
       </div>
     </div>
   );

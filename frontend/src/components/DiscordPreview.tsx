@@ -18,6 +18,8 @@ export function DiscordPreview({
   useEmbed,
   embedTitle,
   embedDescription,
+  embedAuthorName,
+  embedAuthorIcon,
   embedImage,
   embedColor,
   attachments,
@@ -28,6 +30,8 @@ export function DiscordPreview({
   useEmbed: boolean;
   embedTitle: string;
   embedDescription: string;
+  embedAuthorName: string;
+  embedAuthorIcon: string;
   embedImage: string;
   embedColor: string;
   attachments: Attachment[];
@@ -60,10 +64,20 @@ export function DiscordPreview({
             className="dc-embed"
             style={{ borderLeftColor: /^#[0-9a-fA-F]{6}$/.test(embedColor) ? embedColor : "#4f545c" }}
           >
-            {authorName && (
+            {/* Автор эмбеда независим от отправителя: нет имени — нет строки,
+                нет иконки — имя без картинки. */}
+            {embedAuthorName && (
               <div className="dc-embed-author">
-                {authorAvatar && <img src={authorAvatar} alt="" />}
-                <span>{authorName}</span>
+                {embedAuthorIcon && (
+                  <img
+                    src={embedAuthorIcon}
+                    alt=""
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                )}
+                <span>{embedAuthorName}</span>
               </div>
             )}
             {embedTitle && <div className="dc-embed-title">{embedTitle}</div>}

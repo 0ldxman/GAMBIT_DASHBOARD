@@ -2,17 +2,21 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.discord_api import DiscordError
 from app.discord_api import list_guild_channels
+from app.models import Entity
+from app.models import EntityMember
 from app.models import Project
 from app.models import ProjectChannel
 from app.models import ProjectRole
 from app.schemas import ProjectCreate
 from app.schemas import ProjectOut
+from app.schemas import ProjectStats
 from app.schemas import ProjectRoleCreate
 from app.schemas import ProjectRoleOut
 from app.schemas import ProjectRoleUpdate
@@ -86,6 +90,31 @@ async def list_projects(
         query = query.where(Project.guild_id == guild_id)
     result = await db.execute(query.order_by(Project.created_at.desc()))
     return list(result.scalars().all())
+
+
+@router.get("/stats", response_model=list[ProjectStats])
+async def project_stats(
+    guild_id: int | None = None, db: AsyncSession = Depends(get_db)
+) -> list[ProjectStats]:
+    """Сущности и уникальные игроки по проектам — для карточек на экране сервера."""
+    query = (
+        select(
+            Entity.project_id,
+            func.count(func.distinct(Entity.id)),
+            func.count(func.distinct(EntityMember.player_id)),
+        )
+        .outerjoin(EntityMember, EntityMember.entity_id == Entity.id)
+        .group_by(Entity.project_id)
+    )
+    if guild_id is not None:
+        query = query.join(Project, Project.id == Entity.project_id).where(
+            Project.guild_id == guild_id
+        )
+    result = await db.execute(query)
+    return [
+        ProjectStats(project_id=pid, entity_count=entities, player_count=players)
+        for pid, entities, players in result.all()
+    ]
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)

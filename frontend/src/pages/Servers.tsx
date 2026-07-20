@@ -28,19 +28,44 @@ export function Servers() {
         <p className="muted">Бот пока не добавлен ни на один сервер.</p>
       )}
 
-      <div className="grid">
+      <div className="server-grid">
         {guilds.data?.map((g) => (
           <Link key={g.guild_id} to={`/servers/${g.guild_id}`} className="card server-card">
-            <GuildIcon guild={g} />
-            <div>
-              <h3 style={{ margin: 0 }}>{g.name}</h3>
-              <div className="muted mono">{g.guild_id}</div>
+            <GuildIcon guild={g} size={72} />
+            <h3 className="server-name">{g.name}</h3>
+            <div className="server-stats">
+              <Stat value={g.project_count} label={plural(g.project_count, "проект", "проекта", "проектов")} />
+              {g.member_count != null && (
+                <Stat
+                  value={g.member_count}
+                  label={plural(g.member_count, "участник", "участника", "участников")}
+                />
+              )}
             </div>
           </Link>
         ))}
       </div>
     </div>
   );
+}
+
+function Stat({ value, label }: { value: number; label: string }) {
+  return (
+    <div className="stat">
+      <div className="stat-value">{value}</div>
+      <div className="stat-label">{label}</div>
+    </div>
+  );
+}
+
+/** Русское склонение числительных: 1 проект, 2 проекта, 5 проектов. */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  const mod10 = n % 10;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
 }
 
 /** Иконка сервера, а без неё — инициалы, как это делает сам Discord. */

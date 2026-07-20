@@ -94,12 +94,15 @@ def guild_icon_url(guild_id: int, icon_hash: Optional[str]) -> Optional[str]:
 
 async def list_bot_guilds() -> list[dict[str, Any]]:
     """Серверы, на которых стоит бот. Мастер выбирает сервер, а не вводит guild_id."""
-    raw = await _get("/users/@me/guilds")
+    # with_counts даёт приблизительное число участников одним запросом,
+    # иначе пришлось бы выкачивать список членов каждого сервера.
+    raw = await _get("/users/@me/guilds?with_counts=true")
     guilds = [
         {
             "guild_id": str(g["id"]),
             "name": g.get("name", ""),
             "icon_url": guild_icon_url(int(g["id"]), g.get("icon")),
+            "member_count": g.get("approximate_member_count"),
         }
         for g in raw
     ]
@@ -146,6 +149,55 @@ async def get_guild_member(guild_id: int, user_id: int) -> dict[str, Any]:
     else:
         url = avatar_url(uid, user.get("avatar"), str(user.get("discriminator", "0")))
     return {"player_id": str(uid), "name": name, "avatar_url": url}
+
+
+def _member_profile(guild_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    """Имя и аватар участника: ник на сервере важнее глобального имени."""
+    user = data.get("user") or {}
+    uid = int(user["id"])
+    name = data.get("nick") or user.get("global_name") or user.get("username") or str(uid)
+    if data.get("avatar"):
+        ext = "gif" if data["avatar"].startswith("a_") else "png"
+        url = (
+            f"https://cdn.discordapp.com/guilds/{guild_id}/users/{uid}"
+            f"/avatars/{data['avatar']}.{ext}?size=128"
+        )
+    else:
+        url = avatar_url(uid, user.get("avatar"), str(user.get("discriminator", "0")))
+    return {"player_id": str(uid), "name": name, "avatar_url": url}
+
+
+async def list_guild_members(guild_id: int, limit: int = 1000) -> list[dict[str, Any]]:
+    """Участники сервера с их ролями.
+
+    Требует привилегированный интент SERVER MEMBERS в Developer Portal — без него
+    Discord отвечает 403, поэтому ошибку разворачиваем в понятную подсказку.
+    """
+    members: list[dict[str, Any]] = []
+    after = 0
+    while True:
+        try:
+            page = await _get(f"/guilds/{guild_id}/members?limit=1000&after={after}")
+        except DiscordError as exc:
+            if "403" in str(exc) or "нет доступа" in str(exc) or "нет прав" in str(exc):
+                raise DiscordError(
+                    "Discord не отдаёт список участников. Включите SERVER MEMBERS INTENT "
+                    "в Developer Portal → Bot → Privileged Gateway Intents и перезапустите бота."
+                )
+            raise
+        if not page:
+            break
+        for m in page:
+            if (m.get("user") or {}).get("bot"):
+                continue
+            profile = _member_profile(guild_id, m)
+            profile["role_ids"] = [str(r) for r in m.get("roles", [])]
+            members.append(profile)
+        after = int(page[-1]["user"]["id"])
+        if len(page) < 1000 or len(members) >= limit:
+            break
+    members.sort(key=lambda m: m["name"].lower())
+    return members
 
 
 # ---------- роли ----------

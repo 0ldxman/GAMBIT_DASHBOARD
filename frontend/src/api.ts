@@ -13,11 +13,13 @@ import type {
   EntityLink,
   EntityPingCount,
   EntityType,
+  GuildPlayer,
   Member,
   Relation,
   Post,
   Project,
   ProjectRole,
+  ProjectStats,
   Registration,
   RegistrationForm,
   TemplatePreview,
@@ -103,6 +105,11 @@ export const api = {
   deleteProject: (id: number) => request<void>("DELETE", `/projects/${id}`),
 
   // категории проекта (discord id строками)
+  projectStats: (guildId?: string) =>
+    request<ProjectStats[]>(
+      "GET",
+      `/projects/stats${guildId ? `?guild_id=${guildId}` : ""}`,
+    ),
   listCategories: (pid: number) =>
     request<string[]>("GET", `/projects/${pid}/categories`),
 
@@ -267,6 +274,8 @@ export const api = {
     request<DiscordChannel[]>("GET", `/projects/${pid}/discord/channels`),
   getDiscordMember: (pid: number, userId: string) =>
     request<DiscordMember>("GET", `/projects/${pid}/discord/members/${userId}`),
+  listGuildPlayers: (pid: number) =>
+    request<GuildPlayer[]>("GET", `/projects/${pid}/discord/players`),
   listDiscordRoles: (pid: number) =>
     request<DiscordRole[]>("GET", `/projects/${pid}/discord/roles`),
   createDiscordChannel: (

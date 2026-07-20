@@ -23,6 +23,15 @@ export interface DiscordGuild {
   guild_id: string;
   name: string;
   icon_url: string | null;
+  member_count: number | null;
+  project_count: number;
+}
+
+/** Сводка по проекту для карточки на экране сервера. */
+export interface ProjectStats {
+  project_id: number;
+  entity_count: number;
+  player_count: number;
 }
 
 export interface Channel {
@@ -40,6 +49,8 @@ export interface EntityType {
   slug: string;
   label: string;
   attributes_template: string;
+  /** Заготовка атрибутов: с неё создаётся новая сущность типа. */
+  attributes_schema: Record<string, unknown>;
 }
 
 export interface Member {
@@ -129,6 +140,11 @@ export interface DiscordMember {
   avatar_url: string;
 }
 
+/** Участник сервера с ролями проекта — для выбора игрока из списка. */
+export interface GuildPlayer extends DiscordMember {
+  role_names: string[];
+}
+
 export interface Entity {
   id: number;
   project_id: number;
@@ -186,6 +202,8 @@ export interface Post {
   use_embed: boolean;
   embed_title: string;
   embed_description: string;
+  embed_author_name: string;
+  embed_author_icon_url: string;
   embed_image_url: string;
   embed_color: string;
 }

@@ -9,6 +9,20 @@ const STATUS_LABEL: Record<string, string> = {
   published: "опубликован",
 };
 
+const WHEN_FMT = new Intl.DateTimeFormat("ru-RU", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** Когда верд ушёл или уйдёт в канал. */
+function whenLabel(p: Post): string {
+  if (p.published_at) return WHEN_FMT.format(new Date(p.published_at));
+  if (p.scheduled_at) return `→ ${WHEN_FMT.format(new Date(p.scheduled_at))}`;
+  return "—";
+}
+
 export function PostsTab({ projectId }: { projectId: number }) {
   const posts = useAsync<Post[]>(() => api.listPosts(projectId), [projectId]);
   const channels = useAsync<Channel[]>(() => api.listChannels(projectId), [projectId]);
@@ -61,6 +75,7 @@ export function PostsTab({ projectId }: { projectId: number }) {
               <th>Заголовок</th>
               <th>Статус</th>
               <th>Канал</th>
+              <th>Когда</th>
               <th>Содержимое</th>
               <th></th>
             </tr>
@@ -77,6 +92,9 @@ export function PostsTab({ projectId }: { projectId: number }) {
                   <span className={`badge ${p.status}`}>{STATUS_LABEL[p.status]}</span>
                 </td>
                 <td className="muted">{channelName(p)}</td>
+                <td className="muted" style={{ fontSize: 13, whiteSpace: "nowrap" }}>
+                  {whenLabel(p)}
+                </td>
                 <td className="muted" style={{ fontSize: 13 }}>
                   {[
                     p.content && "текст",

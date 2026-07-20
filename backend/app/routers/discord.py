@@ -15,16 +15,19 @@ from app.discord_api import create_channel
 from app.discord_api import delete_channel as discord_delete_channel
 from app.discord_api import get_guild_member
 from app.discord_api import list_guild_channels
+from app.discord_api import list_guild_members
 from app.discord_api import list_guild_roles
 from app.models import Entity
 from app.models import EntityChannel
 from app.models import EntityMember
 from app.models import ProjectChannel
+from app.models import ProjectRole
 from app.routers.projects import get_project_or_404
 from app.schemas import CreateChannelRequest
 from app.schemas import DiscordChannelOut
 from app.schemas import DiscordMemberOut
 from app.schemas import DiscordRoleOut
+from app.schemas import GuildPlayerOut
 from app.security import require_master
 
 router = APIRouter(
@@ -72,6 +75,43 @@ async def guild_roles(project_id: int, db: AsyncSession = Depends(get_db)):
         return await list_guild_roles(guild_id)
     except DiscordError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@router.get("/players", response_model=list[GuildPlayerOut])
+async def guild_players(project_id: int, db: AsyncSession = Depends(get_db)):
+    """Участники сервера, имеющие хотя бы одну роль проекта.
+
+    Мастер выбирает игрока из списка с именем и аватаркой, а не вбивает Discord ID.
+    Если роли проекта не настроены, отдаём всех — иначе список был бы пуст и
+    выбрать было бы некого.
+    """
+    guild_id = await _guild_id(project_id, db)
+    result = await db.execute(
+        select(ProjectRole.role_id, ProjectRole.name).where(
+            ProjectRole.project_id == project_id
+        )
+    )
+    role_names = {str(rid): name for rid, name in result.all()}
+
+    try:
+        members = await list_guild_members(guild_id)
+    except DiscordError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    players: list[GuildPlayerOut] = []
+    for m in members:
+        matched = [role_names[r] for r in m["role_ids"] if r in role_names]
+        if role_names and not matched:
+            continue
+        players.append(
+            GuildPlayerOut(
+                player_id=m["player_id"],
+                name=m["name"],
+                avatar_url=m["avatar_url"],
+                role_names=matched,
+            )
+        )
+    return players
 
 
 @router.post("/channels", response_model=DiscordChannelOut, status_code=status.HTTP_201_CREATED)

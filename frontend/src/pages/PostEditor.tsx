@@ -14,6 +14,29 @@ import type {
   Post,
 } from "../types";
 
+/** ISO из API → значение для <input type="datetime-local"> в местном времени. */
+function toLocalInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
+/** Местное время из инпута → ISO с зоной, чтобы бот отправил верд вовремя. */
+function fromLocalInput(value: string): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+const DATE_FMT = new Intl.DateTimeFormat("ru-RU", {
+  dateStyle: "long",
+  timeStyle: "short",
+});
+
 const MODE_LABEL: Record<EditMode, string> = {
   set: "=  записать",
   expr: "ƒ  вычислить",
@@ -50,10 +73,14 @@ export function PostEditorPage() {
   const [useEmbed, setUseEmbed] = useState(false);
   const [embedTitle, setEmbedTitle] = useState("");
   const [embedDescription, setEmbedDescription] = useState("");
+  const [embedAuthorName, setEmbedAuthorName] = useState("");
+  const [embedAuthorIcon, setEmbedAuthorIcon] = useState("");
   const [embedImage, setEmbedImage] = useState("");
   const [embedColor, setEmbedColor] = useState("#5865F2");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [edits, setEdits] = useState<EntityEdit[]>([]);
+  // Пусто — публикуем сразу; иначе бот отправит верд в это время.
+  const [scheduledAt, setScheduledAt] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -76,9 +103,12 @@ export function PostEditorPage() {
     setUseEmbed(p.use_embed);
     setEmbedTitle(p.embed_title);
     setEmbedDescription(p.embed_description);
+    setEmbedAuthorName(p.embed_author_name);
+    setEmbedAuthorIcon(p.embed_author_icon_url);
     setEmbedImage(p.embed_image_url);
     setEmbedColor(p.embed_color || "#5865F2");
     setAttachments(p.attachments ?? []);
+    setScheduledAt(toLocalInput(p.scheduled_at));
     // Старые верды могли храниться в формате attributes — показываем как set-операции.
     setEdits(
       (p.entity_edits ?? []).map((e) => ({
@@ -128,8 +158,11 @@ export function PostEditorPage() {
       use_embed: useEmbed,
       embed_title: embedTitle,
       embed_description: embedDescription,
+      embed_author_name: embedAuthorName,
+      embed_author_icon_url: embedAuthorIcon,
       embed_image_url: embedImage,
       embed_color: embedColor,
+      scheduled_at: fromLocalInput(scheduledAt),
       attachments,
       entity_edits: normalized,
     };
@@ -163,6 +196,26 @@ export function PostEditorPage() {
     }
   }
 
+  async function schedule() {
+    const iso = fromLocalInput(scheduledAt);
+    if (!iso) {
+      setMsg("Укажите дату и время публикации");
+      return;
+    }
+    if (new Date(iso).getTime() < Date.now()) {
+      setMsg("Время публикации уже прошло");
+      return;
+    }
+    const id = await save();
+    if (id == null) return;
+    try {
+      await api.schedulePost(pid, id, iso);
+      navigate(`/projects/${pid}`);
+    } catch (e) {
+      setMsg(String(e));
+    }
+  }
+
   if (!isNew && existing.loading) return <p className="muted">Загрузка…</p>;
   if (existing.error) return <p className="error">{existing.error}</p>;
 
@@ -173,8 +226,19 @@ export function PostEditorPage() {
         {isNew ? "новый верд" : title || "верд"}
       </div>
 
-      <div className="row spread">
-        <h1>{isNew ? "Новый верд" : "Редактирование верда"}</h1>
+      <header className="page-header">
+        <div className="page-header-text">
+          <h1>{isNew ? "Новый верд" : title || "Верд"}</h1>
+          <p className="muted">
+            <StatusBadge status={existing.data?.status ?? "draft"} />
+            {existing.data?.published_at && (
+              <> Опубликован {DATE_FMT.format(new Date(existing.data.published_at))}</>
+            )}
+            {!existing.data?.published_at && existing.data?.scheduled_at && (
+              <> Запланирован на {DATE_FMT.format(new Date(existing.data.scheduled_at))}</>
+            )}
+          </p>
+        </div>
         <div className="row" style={{ gap: 8 }}>
           <button className="ghost" onClick={() => navigate(`/projects/${pid}`)}>
             Назад
@@ -182,11 +246,17 @@ export function PostEditorPage() {
           <button className="ghost" disabled={saving || published} onClick={save}>
             {saving ? "Сохранение…" : "Сохранить черновик"}
           </button>
-          <button className="primary" disabled={saving || published} onClick={publish}>
-            Опубликовать
-          </button>
+          {scheduledAt ? (
+            <button className="primary" disabled={saving || published} onClick={schedule}>
+              Запланировать
+            </button>
+          ) : (
+            <button className="primary" disabled={saving || published} onClick={publish}>
+              Опубликовать сейчас
+            </button>
+          )}
         </div>
-      </div>
+      </header>
       {published && (
         <p className="error">Верд уже опубликован — редактирование недоступно.</p>
       )}
@@ -210,14 +280,49 @@ export function PostEditorPage() {
                 onChange={setTargetChannelId}
               />
             </div>
+            <div>
+              <label>Время публикации</label>
+              <div className="row" style={{ gap: 8 }}>
+                <input
+                  type="datetime-local"
+                  value={scheduledAt}
+                  onChange={(e) => setScheduledAt(e.target.value)}
+                />
+                {scheduledAt && (
+                  <button className="ghost" onClick={() => setScheduledAt("")}>
+                    Очистить
+                  </button>
+                )}
+              </div>
+              <p className="muted" style={{ fontSize: 13 }}>
+                {scheduledAt
+                  ? "Верд уйдёт в канал в указанное время — время местное."
+                  : "Пусто — публикуется сразу по кнопке."}
+              </p>
+            </div>
+          </section>
+
+          {/* --- отправитель: идентичность вебхука --- */}
+          <section className="card">
+            <h3 style={{ marginTop: 0 }}>Отправитель</h3>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              От чьего имени приходит само сообщение в Discord — имя и аватарка вебхука.
+            </p>
             <div className="row" style={{ gap: 12 }}>
               <div style={{ flex: 1 }}>
-                <label>Автор (имя вебхука)</label>
-                <input value={authorName} onChange={(e) => setAuthorName(e.target.value)} />
+                <label>Имя</label>
+                <input
+                  value={authorName}
+                  placeholder="напр. Совет Безопасности"
+                  onChange={(e) => setAuthorName(e.target.value)}
+                />
               </div>
               <div style={{ flex: 1 }}>
-                <label>Аватар автора (URL)</label>
-                <input value={authorAvatar} onChange={(e) => setAuthorAvatar(e.target.value)} />
+                <label>Аватарка (URL)</label>
+                <input
+                  value={authorAvatar}
+                  onChange={(e) => setAuthorAvatar(e.target.value)}
+                />
               </div>
             </div>
           </section>
@@ -252,6 +357,28 @@ export function PostEditorPage() {
             </div>
             {useEmbed && (
               <div className="stack" style={{ marginTop: 12 }}>
+                <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+                  Автор эмбеда не связан с отправителем: пусто — строки автора не будет,
+                  без иконки — имя выведется без картинки.
+                </p>
+                <div className="row" style={{ gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <label>Автор эмбеда</label>
+                    <input
+                      value={embedAuthorName}
+                      placeholder="не выводится, если пусто"
+                      onChange={(e) => setEmbedAuthorName(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label>Иконка автора (URL)</label>
+                    <input
+                      value={embedAuthorIcon}
+                      placeholder="необязательно"
+                      onChange={(e) => setEmbedAuthorIcon(e.target.value)}
+                    />
+                  </div>
+                </div>
                 <div>
                   <label>Заголовок эмбеда</label>
                   <input value={embedTitle} onChange={(e) => setEmbedTitle(e.target.value)} />
@@ -309,6 +436,8 @@ export function PostEditorPage() {
             useEmbed={useEmbed}
             embedTitle={embedTitle}
             embedDescription={embedDescription}
+            embedAuthorName={embedAuthorName}
+            embedAuthorIcon={embedAuthorIcon}
             embedImage={embedImage}
             embedColor={embedColor}
             attachments={attachments}
@@ -317,6 +446,12 @@ export function PostEditorPage() {
       </div>
     </div>
   );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const label =
+    status === "published" ? "Опубликован" : status === "scheduled" ? "Запланирован" : "Черновик";
+  return <span className={`badge ${status}`}>{label}</span>;
 }
 
 /** Выбор канала: из привязанных, из каналов сервера или вручную. */

@@ -46,9 +46,12 @@ def _build_embed(post: dict[str, Any]) -> Optional[discord.Embed]:
         description=post.get("embed_description") or None,
         color=_parse_color(post.get("embed_color", "")),
     )
-    if post.get("author_name"):
+    # Автор эмбеда независим от отправителя: пусто — строки автора нет вовсе,
+    # нет иконки — автор пишется без неё.
+    if post.get("embed_author_name"):
         embed.set_author(
-            name=post["author_name"], icon_url=post.get("author_avatar_url") or None
+            name=post["embed_author_name"],
+            icon_url=post.get("embed_author_icon_url") or None,
         )
     if post.get("embed_image_url"):
         embed.set_image(url=post["embed_image_url"])

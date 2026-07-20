@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
+import { JsonEditor } from "../components/JsonEditor";
 import type { EntityType, TemplatePreview } from "../types";
 
 const SAMPLE_HINT = `{
@@ -34,7 +35,9 @@ export function EntityTypeEditorPage() {
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
   const [template, setTemplate] = useState(DEFAULT_TEMPLATE);
+  // Структура атрибутов: и заготовка для новых сущностей, и данные предпросмотра.
   const [sample, setSample] = useState(SAMPLE_HINT);
+  const [sampleError, setSampleError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TemplatePreview | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -46,6 +49,9 @@ export function EntityTypeEditorPage() {
     setLabel(existing.label);
     setSlug(existing.slug);
     setTemplate(existing.attributes_template);
+    // У типов, созданных до появления структуры, она пустая — показываем подсказку.
+    const schema = existing.attributes_schema ?? {};
+    setSample(Object.keys(schema).length > 0 ? JSON.stringify(schema, null, 2) : SAMPLE_HINT);
     setLoaded(true);
   }, [existing, loaded]);
 
@@ -74,13 +80,30 @@ export function EntityTypeEditorPage() {
   }, [template, sample, label, pid]);
 
   async function save() {
+    let schema: Record<string, unknown>;
+    try {
+      const parsed = sample.trim() ? JSON.parse(sample) : {};
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("ожидается объект");
+      }
+      schema = parsed;
+    } catch (e) {
+      setErr(`Структура атрибутов — некорректный JSON: ${String(e)}`);
+      return;
+    }
     setBusy(true);
     setErr(null);
+    const payload = {
+      label,
+      slug,
+      attributes_template: template,
+      attributes_schema: schema,
+    };
     try {
       if (existing) {
-        await api.updateType(pid, existing.id, { label, slug, attributes_template: template });
+        await api.updateType(pid, existing.id, payload);
       } else {
-        await api.createType(pid, { label, slug, attributes_template: template });
+        await api.createType(pid, payload);
       }
       navigate(`/projects/${pid}?tab=types`);
     } catch (e) {
@@ -140,12 +163,26 @@ export function EntityTypeEditorPage() {
           </div>
 
           <div className="section">
-            <label>Пример атрибутов (JSON) — только для предпросмотра</label>
-            <textarea
+            <label>Структура атрибутов (JSON)</label>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              Новая сущность этого типа создаётся сразу с этими полями и значениями —
+              их останется только заполнить. Здесь же берутся данные для предпросмотра
+              справа.
+            </p>
+            <JsonEditor
               value={sample}
-              style={{ minHeight: 180, fontFamily: "ui-monospace, monospace" }}
-              onChange={(e) => setSample(e.target.value)}
+              minHeight={200}
+              onChange={(v) => {
+                setSample(v);
+                try {
+                  JSON.parse(v || "{}");
+                  setSampleError(null);
+                } catch (e) {
+                  setSampleError(String(e));
+                }
+              }}
             />
+            {sampleError && <div className="error">{sampleError}</div>}
           </div>
         </div>
 

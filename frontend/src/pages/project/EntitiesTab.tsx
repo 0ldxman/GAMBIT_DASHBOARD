@@ -114,11 +114,16 @@ function CreateEntityModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const schemaKeys = Object.keys(
+    types.find((t) => t.id === typeId)?.attributes_schema ?? {},
+  ).length;
+
   async function save() {
     setBusy(true);
     setErr(null);
     try {
-      await api.createEntity(projectId, { label, type_id: typeId, attributes: {} });
+      // attributes не шлём вовсе: пустой объект — сигнал взять заготовку типа.
+      await api.createEntity(projectId, { label, type_id: typeId });
       onCreated();
     } catch (e) {
       setErr(String(e));
@@ -146,6 +151,12 @@ function CreateEntityModal({
               </option>
             ))}
           </select>
+          {schemaKeys > 0 && (
+            <p className="muted" style={{ fontSize: 13 }}>
+              Сущность создастся с атрибутами типа: {schemaKeys}{" "}
+              {schemaKeys === 1 ? "поле" : schemaKeys < 5 ? "поля" : "полей"} верхнего уровня.
+            </p>
+          )}
         </div>
         {err && <div className="error">{err}</div>}
         <div className="row spread">

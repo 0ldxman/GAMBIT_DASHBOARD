@@ -4,8 +4,8 @@ import { api } from "../api";
 import { useAsync } from "../hooks";
 import { Modal } from "../components/Modal";
 import { CategoryPicker } from "../components/CategoryPicker";
-import { GuildIcon } from "./Servers";
-import type { DiscordChannel, DiscordGuild, Project } from "../types";
+import { GuildIcon, plural } from "./Servers";
+import type { DiscordChannel, DiscordGuild, Project, ProjectStats } from "../types";
 
 /** Проекты, идущие на одном сервере. Сервер здесь уже известен — вводить его не нужно. */
 export function ServerPage() {
@@ -14,10 +14,15 @@ export function ServerPage() {
 
   const guilds = useAsync<DiscordGuild[]>(() => api.listGuilds(), []);
   const projects = useAsync<Project[]>(() => api.listProjects(gid), [gid]);
+  const stats = useAsync<ProjectStats[]>(
+    () => api.projectStats(gid).catch(() => []),
+    [gid],
+  );
   const channels = useAsync<DiscordChannel[]>(() => api.listGuildChannels(gid), [gid]);
   const [creating, setCreating] = useState(false);
 
   const guild = guilds.data?.find((g) => g.guild_id === gid);
+  const statsFor = (id: number) => stats.data?.find((s) => s.project_id === id);
 
   return (
     <div>
@@ -25,15 +30,28 @@ export function ServerPage() {
         <Link to="/">Серверы</Link> / {guild?.name ?? gid}
       </div>
 
-      <div className="row spread">
-        <div className="row" style={{ gap: 12 }}>
-          {guild && <GuildIcon guild={guild} size={40} />}
-          <h1 style={{ margin: 0 }}>{guild?.name ?? "Сервер"}</h1>
+      <header className="page-header">
+        {guild && <GuildIcon guild={guild} size={64} />}
+        <div className="page-header-text">
+          <h1>{guild?.name ?? "Сервер"}</h1>
+          <p className="muted">
+            {guild?.member_count != null &&
+              `${guild.member_count} ${plural(
+                guild.member_count,
+                "участник",
+                "участника",
+                "участников",
+              )} · `}
+            {projects.data?.length ?? 0}{" "}
+            {plural(projects.data?.length ?? 0, "проект", "проекта", "проектов")}
+          </p>
         </div>
         <button className="primary" onClick={() => setCreating(true)}>
           + Новый проект
         </button>
-      </div>
+      </header>
+
+      <h2 className="section-title">Проекты</h2>
 
       {projects.loading && <p className="muted">Загрузка…</p>}
       {projects.error && <p className="error">{projects.error}</p>}
@@ -41,14 +59,29 @@ export function ServerPage() {
         <p className="muted">На этом сервере пока нет проектов. Создайте первый.</p>
       )}
 
-      <div className="grid">
-        {projects.data?.map((p) => (
-          <Link key={p.id} to={`/projects/${p.id}`} className="card">
-            <h3>{p.label}</h3>
-            {p.type && <div className="muted">{p.type}</div>}
-            {p.desc && <p className="muted">{p.desc}</p>}
-          </Link>
-        ))}
+      <div className="project-grid">
+        {projects.data?.map((p) => {
+          const s = statsFor(p.id);
+          return (
+            <Link key={p.id} to={`/projects/${p.id}`} className="card project-card">
+              <div>
+                <h3 className="project-name">{p.label}</h3>
+                {p.type && <div className="project-type">{p.type}</div>}
+              </div>
+              {p.desc && <p className="muted project-desc">{p.desc}</p>}
+              <div className="project-stats">
+                <span>
+                  👤 {s?.player_count ?? 0}{" "}
+                  {plural(s?.player_count ?? 0, "игрок", "игрока", "игроков")}
+                </span>
+                <span>
+                  🗂 {s?.entity_count ?? 0}{" "}
+                  {plural(s?.entity_count ?? 0, "сущность", "сущности", "сущностей")}
+                </span>
+              </div>
+            </Link>
+          );
+        })}
       </div>
 
       {creating && (

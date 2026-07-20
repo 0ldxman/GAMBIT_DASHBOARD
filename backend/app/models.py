@@ -128,6 +128,9 @@ class EntityType(Base):
     label: Mapped[str] = mapped_column(String(200))
     # Jinja2-шаблон текста embed (напр. для /me-info). Значения из entity.attributes.
     attributes_template: Mapped[str] = mapped_column(Text, default="")
+    # Заготовка атрибутов: структура JSON со значениями по умолчанию. Новая сущность
+    # этого типа создаётся с её копией, чтобы мастер не набирал поля заново.
+    attributes_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
     project: Mapped[Project] = relationship(back_populates="entity_types")
     entities: Mapped[list[Entity]] = relationship(back_populates="type")
@@ -263,9 +266,13 @@ class Post(Base):
         ForeignKey("project_post.id", ondelete="SET NULL"), nullable=True
     )
 
-    # Идентичность вебхука + author эмбеда.
+    # Идентичность вебхука — от чьего имени приходит само сообщение.
     author_name: Mapped[str] = mapped_column(String(200), default="")
     author_avatar_url: Mapped[str] = mapped_column(String(500), default="")
+    # Автор внутри эмбеда — отдельная строка со своей иконкой. Пусто = взять
+    # идентичность вебхука, как было до разделения этих полей.
+    embed_author_name: Mapped[str] = mapped_column(String(200), default="")
+    embed_author_icon_url: Mapped[str] = mapped_column(String(500), default="")
     # Формат: content шлётся как текст сообщения; при use_embed добавляется эмбед
     # со СВОИМИ заголовком и описанием (title — внутреннее имя верда для дашборда).
     use_embed: Mapped[bool] = mapped_column(default=False)

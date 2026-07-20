@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -87,7 +88,16 @@ async def create_entity(
     project_id: int, body: EntityCreate, db: AsyncSession = Depends(get_db)
 ) -> Entity:
     await get_project_or_404(project_id, db)
-    entity = Entity(project_id=project_id, **body.model_dump())
+    data = body.model_dump()
+
+    # Пустые атрибуты + указанный тип → начинаем с заготовки типа. Копируем
+    # глубоко, иначе все сущности типа делили бы один и тот же вложенный объект.
+    if not data.get("attributes") and data.get("type_id") is not None:
+        entity_type = await db.get(EntityType, data["type_id"])
+        if entity_type is not None and entity_type.project_id == project_id:
+            data["attributes"] = deepcopy(entity_type.attributes_schema or {})
+
+    entity = Entity(project_id=project_id, **data)
     db.add(entity)
     await db.commit()
     return await get_entity_or_404(project_id, entity.id, db)

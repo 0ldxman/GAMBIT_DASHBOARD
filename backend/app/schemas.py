@@ -108,6 +108,8 @@ class EntityTypeBase(BaseModel):
     slug: str
     label: str
     attributes_template: str = ""
+    # Структура атрибутов по умолчанию — с неё начинается новая сущность типа.
+    attributes_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 class EntityTypeCreate(EntityTypeBase):
@@ -118,6 +120,7 @@ class EntityTypeUpdate(BaseModel):
     slug: Optional[str] = None
     label: Optional[str] = None
     attributes_template: Optional[str] = None
+    attributes_schema: Optional[dict[str, Any]] = None
 
 
 class EntityTypeOut(ORMModel):
@@ -126,6 +129,7 @@ class EntityTypeOut(ORMModel):
     slug: str
     label: str
     attributes_template: str
+    attributes_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------- entity ----------
@@ -218,6 +222,20 @@ class DiscordGuildOut(BaseModel):
     guild_id: str
     name: str
     icon_url: Optional[str] = None
+    # Приблизительное число участников — так его отдаёт Discord.
+    member_count: Optional[int] = None
+    project_count: int = 0
+
+
+class ProjectStats(BaseModel):
+    """Сводка по проекту для карточки."""
+
+    project_id: int
+    entity_count: int
+    # Уникальные игроки, закреплённые за сущностями проекта.
+    player_count: int
+
+
 
 
 class DiscordChannelOut(BaseModel):
@@ -249,6 +267,12 @@ class DiscordMemberOut(BaseModel):
     player_id: str
     name: str
     avatar_url: str
+
+
+class GuildPlayerOut(DiscordMemberOut):
+    """Участник сервера, имеющий роль проекта — для выбора игрока из списка."""
+
+    role_names: list[str] = Field(default_factory=list)
 
 
 # ---------- дерево каналов проекта ----------
@@ -345,6 +369,8 @@ class PostBase(BaseModel):
     use_embed: bool = False
     embed_title: str = ""
     embed_description: str = ""
+    embed_author_name: str = ""
+    embed_author_icon_url: str = ""
     embed_image_url: str = ""
     embed_color: str = ""
 
@@ -368,6 +394,8 @@ class PostUpdate(BaseModel):
     use_embed: Optional[bool] = None
     embed_title: Optional[str] = None
     embed_description: Optional[str] = None
+    embed_author_name: Optional[str] = None
+    embed_author_icon_url: Optional[str] = None
     embed_image_url: Optional[str] = None
     embed_color: Optional[str] = None
 
@@ -395,6 +423,8 @@ class PostOut(ORMModel):
     use_embed: bool
     embed_title: str
     embed_description: str
+    embed_author_name: str
+    embed_author_icon_url: str
     embed_image_url: str
     embed_color: str
 
@@ -527,6 +557,8 @@ class PendingPostOut(BaseModel):
     use_embed: bool
     embed_title: str
     embed_description: str
+    embed_author_name: str = ""
+    embed_author_icon_url: str = ""
     embed_image_url: str
     embed_color: str
     author_name: str

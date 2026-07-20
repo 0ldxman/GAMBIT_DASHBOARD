@@ -134,7 +134,20 @@ th { color: var(--muted); font-weight: 500; }
 .kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: center; }
 
 /* --- серверы --- */
-.server-card { display: flex; align-items: center; gap: 14px; }
+.server-grid {
+  display: grid; gap: 16px; margin-top: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+.server-card {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 14px; padding: 28px 20px; min-height: 210px; justify-content: center;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.server-card:hover { transform: translateY(-2px); }
+.server-name { margin: 0; font-size: 17px; line-height: 1.3; }
+.server-stats { display: flex; gap: 22px; }
+.stat-value { font-size: 20px; font-weight: 600; line-height: 1.1; }
+.stat-label { font-size: 12px; opacity: 0.65; }
 .guild-fallback {
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   border-radius: 50%; background: #5865f2; color: #fff; font-weight: 600;
@@ -167,3 +180,67 @@ th { color: var(--muted); font-weight: 500; }
   background: #f23f43; color: #fff; font-size: 11px; font-weight: 600;
   border-radius: 10px; padding: 0 6px; line-height: 16px;
 }
+
+/* --- общая шапка страницы --- */
+.page-header {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  margin: 8px 0 24px;
+}
+.page-header-text { flex: 1; min-width: 220px; }
+.page-header-text h1 { margin: 0 0 4px; }
+.page-header-text p { margin: 0; }
+.section-title { margin: 0 0 12px; font-size: 15px; text-transform: uppercase;
+  letter-spacing: 0.04em; opacity: 0.6; border: none; }
+
+/* --- карточки проектов --- */
+.project-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.project-card { display: flex; flex-direction: column; gap: 10px; min-height: 160px; }
+.project-name { margin: 0; }
+.project-type { font-size: 13px; opacity: 0.6; margin-top: 2px; }
+.project-desc {
+  flex: 1; margin: 0; font-size: 14px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.project-stats {
+  display: flex; gap: 16px; font-size: 13px; opacity: 0.75;
+  padding-top: 10px; border-top: 1px solid rgba(127, 127, 127, 0.18);
+}
+
+/* --- страница сущности --- */
+.entity-layout {
+  display: grid; gap: 24px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+}
+@media (max-width: 900px) { .entity-layout { grid-template-columns: 1fr; } }
+.entity-aside { position: sticky; top: 16px; }
+.entity-picture { width: 64px; height: 64px; border-radius: 12px; object-fit: cover; }
+
+/* --- игроки сущности --- */
+.member-row {
+  display: grid; grid-template-columns: minmax(140px, 1fr) minmax(120px, 180px) auto auto;
+  gap: 10px; align-items: center; padding: 8px 0;
+  border-top: 1px solid rgba(127, 127, 127, 0.16);
+}
+.member-row:first-of-type { border-top: none; }
+.check {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0;
+  font-size: 13px; white-space: nowrap; cursor: pointer;
+}
+.check input { width: auto; margin: 0; }
+.player-picker {
+  display: flex; flex-direction: column; gap: 2px; margin-top: 8px;
+  max-height: 240px; overflow-y: auto;
+  border: 1px solid rgba(127, 127, 127, 0.24); border-radius: 8px; padding: 4px;
+}
+.player-option {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 6px 8px; border: none; border-radius: 6px; background: none;
+  text-align: left; cursor: pointer; font: inherit; color: inherit;
+}
+.player-option:hover { background: rgba(127, 127, 127, 0.12); }
+.player-option.selected { background: rgba(88, 101, 242, 0.22); }
+.player-option img { border-radius: 50%; flex-shrink: 0; }
+.player-option-name { flex: 1; }
