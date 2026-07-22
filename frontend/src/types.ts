@@ -54,7 +54,10 @@ export interface EntityType {
   project_id: number;
   slug: string;
   label: string;
+  /** Зеркало первой страницы — оставлено для типов, созданных до страниц. */
   attributes_template: string;
+  /** Страницы описания: каждая уходит в Discord отдельным эмбедом. */
+  description_pages: string[];
   /** Заготовка атрибутов: с неё создаётся новая сущность типа. */
   attributes_schema: Record<string, unknown>;
 }
@@ -117,6 +120,8 @@ export interface ChannelNode {
   position: number;
   registered_id: number | null;
   entities: EntityLink[];
+  /** Сообщения игроков подменяются вебхуком от лица их сущности. */
+  auto_proxy: boolean;
 }
 
 export interface CategoryNode {
@@ -158,6 +163,9 @@ export interface Entity {
   label: string;
   picture: string;
   attributes: Record<string, unknown>;
+  /** Особое описание замещает страницы типа. */
+  use_custom_description: boolean;
+  description_pages: string[];
   members: Member[];
 }
 
@@ -214,9 +222,32 @@ export interface Post {
   embed_color: string;
 }
 
-export interface TemplatePreview {
+/** Одна страница описания после подстановки атрибутов. */
+export interface RenderedPage {
   rendered: string;
+  length: number;
+  over_limit: boolean;
+}
+
+export interface TemplatePages {
+  pages: RenderedPage[];
+  limit: number;
   error: string | null;
+}
+
+/** Шаблон верда: заранее отобранный набор полей. */
+export interface PostTemplate {
+  id: number;
+  project_id: number;
+  name: string;
+  fields: string[];
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface TemplateField {
+  key: string;
+  label: string;
 }
 
 export type FieldType = "text" | "paragraph" | "number" | "select";

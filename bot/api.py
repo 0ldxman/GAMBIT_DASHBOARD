@@ -96,6 +96,42 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    # ---------- речь от лица сущности ----------
+    async def proxy_channels(self) -> list[str]:
+        """Каналы с включённой авто-подменой (кэшируется ботом)."""
+        r = await self._client.get("/internal/proxy-channels")
+        r.raise_for_status()
+        return r.json()
+
+    async def proxy_context(
+        self, guild_id: int, channel_id: int, player_id: int
+    ) -> Optional[dict[str, Any]]:
+        r = await self._client.get(
+            "/internal/proxy",
+            params={"guild_id": guild_id, "channel_id": channel_id, "player_id": player_id},
+        )
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
+    async def set_proxy_choice(
+        self, guild_id: int, channel_id: int, player_id: int, entity_id: int
+    ) -> Optional[dict[str, Any]]:
+        r = await self._client.post(
+            "/internal/proxy/choice",
+            json={
+                "guild_id": guild_id,
+                "discord_channel_id": channel_id,
+                "player_id": player_id,
+                "entity_id": entity_id,
+            },
+        )
+        if r.status_code in (403, 404):
+            return None
+        r.raise_for_status()
+        return r.json()
+
     async def ping(
         self, guild_id: int, player_id: int, channel_id: Optional[int], message: str
     ) -> None:

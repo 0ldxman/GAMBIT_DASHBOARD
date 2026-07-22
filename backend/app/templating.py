@@ -53,6 +53,39 @@ def render_entity_template(
     return _env.from_string(template_str or "").render(**context)
 
 
+# Предел описания одного эмбеда. Discord режет на 4096, но мастерам показываем
+# 2000: страница длиннее плохо читается в клиенте и почти всегда просится разбить.
+PAGE_SOFT_LIMIT = 2000
+PAGE_HARD_LIMIT = 4096
+
+
+def as_pages(pages: Any, fallback: str = "") -> list[str]:
+    """Список страниц описания из JSONB-поля.
+
+    Пусто — берём fallback (старый одностраничный шаблон типа), чтобы записи,
+    созданные до появления страниц, продолжали отображаться.
+    """
+    if isinstance(pages, list):
+        cleaned = [str(p) for p in pages if str(p).strip()]
+        if cleaned:
+            return cleaned
+    return [fallback] if fallback.strip() else []
+
+
+def render_pages(
+    pages: list[str],
+    attributes: dict[str, Any] | None,
+    *,
+    label: str = "",
+    extra: dict[str, Any] | None = None,
+) -> list[str]:
+    """Отрендерить страницы описания. Каждая уходит отдельным эмбедом."""
+    return [
+        render_entity_template(page, attributes, label=label, extra=extra)[:PAGE_HARD_LIMIT]
+        for page in pages
+    ]
+
+
 def validate_template(template_str: str) -> str | None:
     """Проверить синтаксис шаблона. Возвращает текст ошибки или None."""
     from jinja2 import TemplateSyntaxError

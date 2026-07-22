@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { DiscordPreview } from "../components/DiscordPreview";
+import { Modal } from "../components/Modal";
 import type {
   Attachment,
   Channel,
@@ -12,6 +13,8 @@ import type {
   EntityEdit,
   EntityEditOp,
   Post,
+  PostTemplate,
+  TemplateField,
 } from "../types";
 
 /** ISO из API → значение для <input type="datetime-local"> в местном времени. */
@@ -63,6 +66,7 @@ export function PostEditorPage() {
     () => api.listDiscordChannels(pid).catch(() => []),
     [pid],
   );
+  const templates = useAsync<PostTemplate[]>(() => api.listPostTemplates(pid), [pid]);
 
   // --- поля верда ---
   const [title, setTitle] = useState("");
@@ -85,6 +89,51 @@ export function PostEditorPage() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [appliedTemplate, setAppliedTemplate] = useState<number | null>(null);
+
+  // Поля, которыми оперируют шаблоны: имена совпадают с полями верда на backend.
+  const templateValues: Record<string, unknown> = {
+    target_channel_id: targetChannelId,
+    author_name: authorName,
+    author_avatar_url: authorAvatar,
+    content,
+    use_embed: useEmbed,
+    embed_author_name: embedAuthorName,
+    embed_author_icon_url: embedAuthorIcon,
+    embed_title: embedTitle,
+    embed_description: embedDescription,
+    embed_image_url: embedImage,
+    embed_color: embedColor,
+  };
+
+  /** Применить шаблон: трогаем только те поля, что он в себе несёт. */
+  function applyTemplate(tpl: PostTemplate) {
+    const setters: Record<string, (v: unknown) => void> = {
+      target_channel_id: (v) => setTargetChannelId(String(v ?? "")),
+      author_name: (v) => setAuthorName(String(v ?? "")),
+      author_avatar_url: (v) => setAuthorAvatar(String(v ?? "")),
+      content: (v) => setContent(String(v ?? "")),
+      use_embed: (v) => setUseEmbed(Boolean(v)),
+      embed_author_name: (v) => setEmbedAuthorName(String(v ?? "")),
+      embed_author_icon_url: (v) => setEmbedAuthorIcon(String(v ?? "")),
+      embed_title: (v) => setEmbedTitle(String(v ?? "")),
+      embed_description: (v) => setEmbedDescription(String(v ?? "")),
+      embed_image_url: (v) => setEmbedImage(String(v ?? "")),
+      embed_color: (v) => setEmbedColor(String(v ?? "") || "#5865F2"),
+    };
+    for (const key of tpl.fields) setters[key]?.(tpl.data[key]);
+    setAppliedTemplate(tpl.id);
+    setMsg(`Применён шаблон «${tpl.name}»`);
+  }
+
+  async function removeTemplate() {
+    const tpl = templates.data?.find((t) => t.id === appliedTemplate);
+    if (!tpl || !confirm(`Удалить шаблон «${tpl.name}»? Верды это не затронет.`)) return;
+    await api.deletePostTemplate(pid, tpl.id);
+    setAppliedTemplate(null);
+    templates.reload();
+  }
 
   useEffect(() => {
     if (isNew) {
@@ -260,11 +309,54 @@ export function PostEditorPage() {
       {published && (
         <p className="error">Верд уже опубликован — редактирование недоступно.</p>
       )}
-      {msg && <div className={/Сохранено|создан/.test(msg) ? "muted" : "error"}>{msg}</div>}
+      {msg && (
+        <div className={/Сохранено|создан|Применён|Шаблон/.test(msg) ? "muted" : "error"}>{msg}</div>
+      )}
 
       <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
         {/* ---------- левая колонка: редактор ---------- */}
         <div className="stack" style={{ flex: "1 1 520px", minWidth: 340 }}>
+          <section className="card">
+            <div className="row spread">
+              <h3 style={{ margin: 0 }}>Шаблон</h3>
+              <button className="ghost" disabled={published} onClick={() => setSavingTemplate(true)}>
+                Сохранить как шаблон
+              </button>
+            </div>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              Шаблон подставляет только те поля, которые в нём отмечены — остальное
+              в верде остаётся как есть.
+            </p>
+            <div className="row" style={{ gap: 8 }}>
+              <select
+                value={appliedTemplate ?? ""}
+                style={{ flex: 1 }}
+                disabled={published || (templates.data ?? []).length === 0}
+                onChange={(e) => {
+                  const tpl = templates.data?.find((t) => t.id === Number(e.target.value));
+                  if (tpl) applyTemplate(tpl);
+                  else setAppliedTemplate(null);
+                }}
+              >
+                <option value="">
+                  {(templates.data ?? []).length === 0
+                    ? "— шаблонов пока нет —"
+                    : "— применить шаблон —"}
+                </option>
+                {templates.data?.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              {appliedTemplate !== null && (
+                <button className="ghost danger" onClick={removeTemplate}>
+                  Удалить шаблон
+                </button>
+              )}
+            </div>
+          </section>
+
           <section className="card">
             <h3 style={{ marginTop: 0 }}>Основное</h3>
             <div>
@@ -444,7 +536,105 @@ export function PostEditorPage() {
           />
         </div>
       </div>
+
+      {savingTemplate && (
+        <SaveTemplateModal
+          projectId={pid}
+          values={templateValues}
+          onClose={() => setSavingTemplate(false)}
+          onSaved={(name) => {
+            setSavingTemplate(false);
+            setMsg(`Шаблон «${name}» сохранён`);
+            templates.reload();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Что именно шаблон запоминает — мастер отмечает сам. */
+function SaveTemplateModal({
+  projectId,
+  values,
+  onClose,
+  onSaved,
+}: {
+  projectId: number;
+  values: Record<string, unknown>;
+  onClose: () => void;
+  onSaved: (name: string) => void;
+}) {
+  const fields = useAsync<TemplateField[]>(() => api.templateFields(projectId), [projectId]);
+  const [name, setName] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function toggle(key: string) {
+    setPicked(picked.includes(key) ? picked.filter((k) => k !== key) : [...picked, key]);
+  }
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.createPostTemplate(projectId, {
+        name: name.trim(),
+        fields: picked,
+        // Значения берём из формы, а не из сохранённого верда: шаблон должен
+        // повторять то, что мастер видит на экране прямо сейчас.
+        data: Object.fromEntries(picked.map((k) => [k, values[k]])),
+      });
+      onSaved(name.trim());
+    } catch (e) {
+      setErr(String(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Сохранить верд как шаблон" onClose={onClose}>
+      <div className="stack">
+        <div>
+          <label>Название шаблона</label>
+          <input
+            value={name}
+            autoFocus
+            placeholder="напр. Сводка МИДа"
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+
+        <label style={{ marginBottom: 0 }}>Что сохранить</label>
+        {fields.loading && <p className="muted">Загрузка…</p>}
+        {fields.data?.map((f) => (
+          <label className="row" key={f.key} style={{ margin: 0, fontSize: 14 }}>
+            <input
+              type="checkbox"
+              checked={picked.includes(f.key)}
+              style={{ width: "auto", marginRight: 8 }}
+              onChange={() => toggle(f.key)}
+            />
+            {f.label}
+          </label>
+        ))}
+
+        {err && <div className="error">{err}</div>}
+        <div className="row spread">
+          <button className="ghost" onClick={onClose}>
+            Отмена
+          </button>
+          <button
+            className="primary"
+            disabled={busy || !name.trim() || picked.length === 0}
+            onClick={save}
+          >
+            Сохранить
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

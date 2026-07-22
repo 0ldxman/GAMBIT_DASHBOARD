@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { PingBell } from "../components/PingBell";
 import { JsonEditor } from "../components/JsonEditor";
-import type { Entity, EntityPingCount, EntityType, TemplatePreview } from "../types";
+import { PagesEditor, PagesPreview } from "../components/PagesEditor";
+import type { Entity, EntityPingCount, EntityType, TemplatePages } from "../types";
 import { MembersSection } from "./entity/MembersSection";
 import { RelationsSection } from "./entity/RelationsSection";
 import { ChannelsSection } from "./entity/ChannelsSection";
@@ -58,6 +59,87 @@ function unflatten(rows: AttrRow[]): Record<string, unknown> {
   return out;
 }
 
+/** Загруженный файл лежит на backend — в дашборде его отдаёт /api. */
+function pictureSrc(value: string): string {
+  return value.startsWith("/") ? `/api${value}` : value;
+}
+
+/** Картинка сущности: ссылка или загруженный файл. */
+function PictureField({
+  projectId,
+  value,
+  onChange,
+}: {
+  projectId: number;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function upload(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const att = await api.uploadAttachment(projectId, file);
+      onChange(att.url);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <div>
+      <div className="row spread">
+        <label style={{ margin: 0 }}>Картинка сущности</label>
+        <div className="row" style={{ gap: 6 }}>
+          <button className="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>
+            {busy ? "Загрузка…" : "Загрузить файл"}
+          </button>
+          {value && (
+            <button className="ghost danger" onClick={() => onChange("")}>
+              Убрать
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        Аватарка сущности в карточке и в сообщениях, отправленных от её лица.
+        Загруженный файл Discord увидит, только если у backend задан PUBLIC_BASE_URL;
+        иначе надёжнее вставить внешнюю ссылку.
+      </p>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => upload(e.target.files)}
+      />
+      <div className="row" style={{ gap: 10, alignItems: "center" }}>
+        {value && (
+          <img
+            src={pictureSrc(value)}
+            alt=""
+            style={{ width: 48, height: 48, borderRadius: 8, objectFit: "cover" }}
+          />
+        )}
+        <input
+          value={value}
+          placeholder="https://… или загрузите файл"
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </div>
+      {err && <div className="error">{err}</div>}
+    </div>
+  );
+}
+
 export function EntityPage() {
   const { projectId, entityId } = useParams();
   const pid = Number(projectId);
@@ -81,7 +163,9 @@ export function EntityPage() {
   const [jsonMode, setJsonMode] = useState(false);
   const [jsonText, setJsonText] = useState("{}");
   const [jsonError, setJsonError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<TemplatePreview | null>(null);
+  const [preview, setPreview] = useState<TemplatePages | null>(null);
+  const [custom, setCustom] = useState(false);
+  const [customPages, setCustomPages] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -92,6 +176,8 @@ export function EntityPage() {
     setTypeId(entity.data.type_id);
     setRows(flatten(entity.data.attributes));
     setJsonText(JSON.stringify(entity.data.attributes, null, 2));
+    setCustom(entity.data.use_custom_description);
+    setCustomPages(entity.data.description_pages ?? []);
   }, [entity.data]);
 
   // Текущие атрибуты — из активного режима редактирования.
@@ -105,23 +191,30 @@ export function EntityPage() {
     }
   }, [jsonMode, rows, jsonText]);
 
-  const template = useMemo(
-    () => types.data?.find((t) => t.id === typeId)?.attributes_template ?? "",
+  const type = useMemo(
+    () => types.data?.find((t) => t.id === typeId) ?? null,
     [types.data, typeId],
   );
+
+  // Что реально увидят в Discord: особое описание замещает страницы типа.
+  const pages = useMemo(() => {
+    if (custom) return customPages;
+    if (!type) return [];
+    const fromType = type.description_pages ?? [];
+    return fromType.length > 0 ? fromType : [type.attributes_template || ""];
+  }, [custom, customPages, type]);
 
   // Живой предпросмотр embed.
   useEffect(() => {
     const handle = setTimeout(async () => {
       try {
-        const res = await api.previewTemplate(pid, { template, attributes, label });
-        setPreview(res);
+        setPreview(await api.previewPages(pid, { pages, attributes, label }));
       } catch (e) {
-        setPreview({ rendered: "", error: String(e) });
+        setPreview({ pages: [], limit: 2000, error: String(e) });
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [pid, template, attributes, label]);
+  }, [pid, pages, attributes, label]);
 
   function switchMode(toJson: boolean) {
     if (toJson) {
@@ -154,7 +247,14 @@ export function EntityPage() {
     setSaving(true);
     setMsg(null);
     try {
-      await api.updateEntity(pid, eid, { label, picture, type_id: typeId, attributes });
+      await api.updateEntity(pid, eid, {
+        label,
+        picture,
+        type_id: typeId,
+        attributes,
+        use_custom_description: custom,
+        description_pages: customPages,
+      });
       setMsg("Сохранено");
       entity.reload();
     } catch (e) {
@@ -175,14 +275,14 @@ export function EntityPage() {
       </div>
 
       <header className="page-header">
-        {picture && <img className="entity-picture" src={picture} alt="" />}
+        {picture && <img className="entity-picture" src={pictureSrc(picture)} alt="" />}
         <div className="page-header-text">
           <h1>
             {label || "Сущность"}
             <PingBell count={pingCount} />
           </h1>
           <p className="muted">
-            {types.data?.find((t) => t.id === typeId)?.label ?? "без типа"}
+            {type?.label ?? "без типа"}
             {entity.data?.members.length
               ? ` · ${entity.data.members.length} ${
                   entity.data.members.length === 1 ? "игрок" : "игроков"
@@ -212,26 +312,60 @@ export function EntityPage() {
               <label>Название</label>
               <input value={label} onChange={(e) => setLabel(e.target.value)} />
             </div>
-            <div className="row" style={{ gap: 12 }}>
-              <div style={{ flex: 1 }}>
-                <label>Тип</label>
-                <select
-                  value={typeId ?? ""}
-                  onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : null)}
-                >
-                  <option value="">— без типа —</option>
-                  {types.data?.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ flex: 1 }}>
-                <label>Картинка (URL)</label>
-                <input value={picture} onChange={(e) => setPicture(e.target.value)} />
-              </div>
+            <div>
+              <label>Тип</label>
+              <select
+                value={typeId ?? ""}
+                onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">— без типа —</option>
+                {types.data?.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
             </div>
+            <PictureField projectId={pid} value={picture} onChange={setPicture} />
+          </section>
+
+          {/* --- особое описание вместо шаблона типа --- */}
+          <section className="card">
+            <div className="row spread">
+              <h3 style={{ margin: 0 }}>Особое описание</h3>
+              <label className="row" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={custom}
+                  style={{ width: "auto", marginRight: 8 }}
+                  onChange={(e) => {
+                    // Включили впервые — начинаем со страниц типа, чтобы было что править.
+                    if (e.target.checked && customPages.length === 0) setCustomPages(pages);
+                    setCustom(e.target.checked);
+                  }}
+                />
+                включить
+              </label>
+            </div>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              {custom
+                ? "Эти страницы полностью замещают описание, которое даёт тип."
+                : `Сейчас описание берётся из типа${type ? ` «${type.label}»` : ""}. Включите, чтобы задать своё.`}
+            </p>
+            {custom && (
+              <PagesEditor
+                pages={customPages}
+                onChange={setCustomPages}
+                rendered={preview?.pages}
+                limit={preview?.limit ?? 2000}
+                hint={
+                  <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+                    Атрибуты подставляются так же, как в типе: <code>{"{{ население }}"}</code>.
+                    Каждая страница — отдельный эмбед.
+                  </p>
+                }
+              />
+            )}
           </section>
 
           {/* --- атрибуты --- */}
@@ -316,12 +450,7 @@ export function EntityPage() {
         {/* --- предпросмотр --- */}
         <aside className="entity-aside">
           <label>Предпросмотр embed (как в Discord /me-info)</label>
-          {!template && <p className="muted">У типа нет шаблона.</p>}
-          {preview?.error ? (
-            <div className="error">{preview.error}</div>
-          ) : (
-            <div className="embed-preview">{preview?.rendered || " "}</div>
-          )}
+          <PagesPreview pages={preview?.pages} error={preview?.error} />
         </aside>
       </div>
     </div>

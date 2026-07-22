@@ -8,16 +8,20 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_db
+from app.descriptions import render_entity_pages
+from app.models import ChannelSetting
 from app.models import ChannelWebhook
 from app.models import Entity
-from app.models import EntityType
+from app.models import EntityChannel
 from app.models import Notification
 from app.models import NotificationType
 from app.models import Post
 from app.models import PostStatus
 from app.models import Project
 from app.models import EntityMember
+from app.models import ProxyChoice
 from app.models import Registration
 from app.models import RegistrationForm
 from app.resolve import project_for_channel
@@ -27,14 +31,31 @@ from app.schemas import MeInfoOut
 from app.schemas import PendingPostOut
 from app.schemas import PingIn
 from app.schemas import ProjectBriefOut
+from app.schemas import ProxyChoiceIn
+from app.schemas import ProxyContextOut
+from app.schemas import ProxyEntityOut
 from app.schemas import RegistrationCreate
 from app.schemas import RegistrationFormOut
 from app.schemas import WebhookIn
 from app.schemas import WebhookOut
 from app.security import require_internal
-from app.templating import render_entity_template
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(require_internal)])
+
+
+def public_url(path: str) -> str:
+    """Абсолютный URL картинки для Discord.
+
+    Аватарку вебхука Discord скачивает сам, поэтому внутренний путь /uploads/...
+    ему бесполезен. Без PUBLIC_BASE_URL возвращаем пусто — лучше аватарка
+    по умолчанию, чем битая ссылка.
+    """
+    if not path:
+        return ""
+    if path.startswith(("http://", "https://")):
+        return path
+    base = get_settings().public_base_url.rstrip("/")
+    return f"{base}{path}" if base else ""
 
 
 async def _resolve_project(
@@ -121,7 +142,7 @@ async def me_info(
     channel_id: int | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> MeInfoOut:
-    """Рендер embed сущности игрока (команда /me-info). Проект — по каналу."""
+    """Карточка сущности игрока (команда /me-info). Проект — по каналу."""
     project = await _resolve_project(guild_id, channel_id, db)
     result = await db.execute(
         select(Entity)
@@ -133,13 +154,14 @@ async def me_info(
     entity = result.scalars().first()
     if entity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="За вами не закреплена сущность")
-    template = ""
-    if entity.type_id is not None:
-        et = await db.get(EntityType, entity.type_id)
-        if et is not None:
-            template = et.attributes_template
-    rendered = render_entity_template(template, entity.attributes, label=entity.label)
-    return MeInfoOut(entity_id=entity.id, label=entity.label, rendered=rendered)
+    pages = await render_entity_pages(entity, db)
+    return MeInfoOut(
+        entity_id=entity.id,
+        label=entity.label,
+        rendered=pages[0] if pages else "",
+        pages=pages,
+        picture_url=public_url(entity.picture),
+    )
 
 
 @router.post("/ping")
@@ -165,6 +187,129 @@ async def ping_master(body: PingIn, db: AsyncSession = Depends(get_db)) -> dict[
     db.add(note)
     await db.commit()
     return {"status": "ok"}
+
+
+# ---------- речь от лица сущности ----------
+def _proxy_entity(entity: Entity) -> ProxyEntityOut:
+    return ProxyEntityOut(
+        entity_id=entity.id, label=entity.label, picture_url=public_url(entity.picture)
+    )
+
+
+@router.get("/proxy-channels", response_model=list[str])
+async def proxy_channels(db: AsyncSession = Depends(get_db)) -> list[str]:
+    """Каналы с авто-подменой. Бот держит их списком, чтобы не дёргать API
+    на каждое сообщение сервера."""
+    result = await db.execute(
+        select(ChannelSetting.discord_channel_id).where(ChannelSetting.auto_proxy.is_(True))
+    )
+    return [str(row[0]) for row in result.all()]
+
+
+@router.get("/proxy", response_model=ProxyContextOut)
+async def proxy_context(
+    guild_id: int,
+    channel_id: int,
+    player_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ProxyContextOut:
+    """От лица какой сущности игрок говорит в этом канале.
+
+    Кандидаты — его сущности, привязанные к каналу (те, что дают ему доступ).
+    Если канал общий и привязок нет, берём все сущности игрока в проекте.
+    """
+    project = await _resolve_project(guild_id, channel_id, db)
+
+    result = await db.execute(
+        select(ChannelSetting.auto_proxy).where(
+            ChannelSetting.discord_channel_id == channel_id,
+            ChannelSetting.project_id == project.id,
+        )
+    )
+    row = result.first()
+    auto_proxy = bool(row[0]) if row else False
+
+    mine = (
+        select(Entity, EntityMember.is_primary)
+        .join(EntityMember, EntityMember.entity_id == Entity.id)
+        .where(Entity.project_id == project.id, EntityMember.player_id == player_id)
+    )
+    linked = await db.execute(
+        mine.join(EntityChannel, EntityChannel.entity_id == Entity.id).where(
+            EntityChannel.discord_channel_id == channel_id
+        )
+    )
+    rows = list(linked.all())
+    if not rows:
+        rows = list((await db.execute(mine)).all())
+
+    candidates = {entity.id: (entity, is_primary) for entity, is_primary in rows}
+    if not candidates:
+        return ProxyContextOut(project_id=project.id, auto_proxy=auto_proxy)
+
+    chosen: Entity | None = None
+    if len(candidates) == 1:
+        chosen = next(iter(candidates.values()))[0]
+    else:
+        # Явный выбор игрока (команда /say-as) — главнее любых догадок.
+        result = await db.execute(
+            select(ProxyChoice).where(
+                ProxyChoice.player_id == player_id,
+                ProxyChoice.discord_channel_id == channel_id,
+            )
+        )
+        choice = result.scalar_one_or_none()
+        if choice is not None and choice.entity_id in candidates:
+            chosen = candidates[choice.entity_id][0]
+        else:
+            # Единственная сущность, где игрок основной — считаем её его лицом.
+            leading = [e for e, is_primary in candidates.values() if is_primary]
+            if len(leading) == 1:
+                chosen = leading[0]
+
+    return ProxyContextOut(
+        project_id=project.id,
+        auto_proxy=auto_proxy,
+        entity=_proxy_entity(chosen) if chosen else None,
+        candidates=[_proxy_entity(e) for e, _ in candidates.values()],
+        ambiguous=chosen is None,
+    )
+
+
+@router.post("/proxy/choice", response_model=ProxyContextOut)
+async def set_proxy_choice(
+    body: ProxyChoiceIn, db: AsyncSession = Depends(get_db)
+) -> ProxyContextOut:
+    """Запомнить, от лица какой сущности игрок говорит в канале."""
+    project = await _resolve_project(body.guild_id, body.discord_channel_id, db)
+    entity = await db.get(Entity, body.entity_id)
+    if entity is None or entity.project_id != project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сущность не найдена")
+    result = await db.execute(
+        select(EntityMember).where(
+            EntityMember.entity_id == entity.id, EntityMember.player_id == body.player_id
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Вы не игрок этой сущности"
+        )
+
+    stmt = (
+        pg_insert(ProxyChoice)
+        .values(
+            player_id=body.player_id,
+            discord_channel_id=body.discord_channel_id,
+            entity_id=entity.id,
+        )
+        .on_conflict_do_update(
+            index_elements=[ProxyChoice.player_id, ProxyChoice.discord_channel_id],
+            set_={"entity_id": entity.id},
+        )
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return await proxy_context(body.guild_id, body.discord_channel_id, body.player_id, db)
 
 
 # ---------- карточка проекта ----------

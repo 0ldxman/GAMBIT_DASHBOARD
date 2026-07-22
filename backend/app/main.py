@@ -17,6 +17,7 @@ from app.routers import forms
 from app.routers import guilds
 from app.routers import internal
 from app.routers import notifications
+from app.routers import post_templates
 from app.routers import posts
 from app.routers import projects
 from app.routers import registrations
@@ -54,6 +55,7 @@ app.include_router(discord.router)
 app.include_router(entity_types.router)
 app.include_router(entities.router)
 app.include_router(posts.router)
+app.include_router(post_templates.router)
 app.include_router(forms.router)
 app.include_router(registrations.router)
 app.include_router(notifications.router)

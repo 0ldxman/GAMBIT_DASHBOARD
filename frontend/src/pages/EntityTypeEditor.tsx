@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { JsonEditor } from "../components/JsonEditor";
-import type { EntityType, TemplatePreview } from "../types";
+import { PagesEditor, PagesPreview } from "../components/PagesEditor";
+import type { EntityType, TemplatePages } from "../types";
 
 const SAMPLE_HINT = `{
   "столица": "Москва",
@@ -34,11 +35,11 @@ export function EntityTypeEditorPage() {
 
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
-  const [template, setTemplate] = useState(DEFAULT_TEMPLATE);
+  const [pages, setPages] = useState<string[]>([DEFAULT_TEMPLATE]);
   // Структура атрибутов: и заготовка для новых сущностей, и данные предпросмотра.
   const [sample, setSample] = useState(SAMPLE_HINT);
   const [sampleError, setSampleError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<TemplatePreview | null>(null);
+  const [preview, setPreview] = useState<TemplatePages | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -48,7 +49,9 @@ export function EntityTypeEditorPage() {
     if (loaded || !existing) return;
     setLabel(existing.label);
     setSlug(existing.slug);
-    setTemplate(existing.attributes_template);
+    // У типов, созданных до появления страниц, описание лежит одной строкой.
+    const saved = existing.description_pages ?? [];
+    setPages(saved.length > 0 ? saved : [existing.attributes_template || ""]);
     // У типов, созданных до появления структуры, она пустая — показываем подсказку.
     const schema = existing.attributes_schema ?? {};
     setSample(Object.keys(schema).length > 0 ? JSON.stringify(schema, null, 2) : SAMPLE_HINT);
@@ -61,23 +64,19 @@ export function EntityTypeEditorPage() {
       try {
         attrs = sample.trim() ? JSON.parse(sample) : {};
       } catch {
-        setPreview({ rendered: "", error: "Некорректный JSON атрибутов" });
+        setPreview({ pages: [], limit: 2000, error: "Некорректный JSON атрибутов" });
         return;
       }
       try {
         setPreview(
-          await api.previewTemplate(pid, {
-            template,
-            attributes: attrs,
-            label: label || "Пример",
-          }),
+          await api.previewPages(pid, { pages, attributes: attrs, label: label || "Пример" }),
         );
       } catch (e) {
-        setPreview({ rendered: "", error: String(e) });
+        setPreview({ pages: [], limit: 2000, error: String(e) });
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [template, sample, label, pid]);
+  }, [pages, sample, label, pid]);
 
   async function save() {
     let schema: Record<string, unknown>;
@@ -96,7 +95,7 @@ export function EntityTypeEditorPage() {
     const payload = {
       label,
       slug,
-      attributes_template: template,
+      description_pages: pages,
       attributes_schema: schema,
     };
     try {
@@ -149,16 +148,19 @@ export function EntityTypeEditorPage() {
           </div>
 
           <div className="section">
-            <label>Шаблон embed</label>
-            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-              Jinja2 с кириллицей: <code>{"{{ население }}"}</code>. Вложенность через
-              точку: <code>{"{{ ВС.людские_ресурсы }}"}</code>. Отсутствующий атрибут
-              просто останется пустым.
-            </p>
-            <textarea
-              value={template}
-              style={{ minHeight: 280, fontFamily: "ui-monospace, monospace" }}
-              onChange={(e) => setTemplate(e.target.value)}
+            <PagesEditor
+              pages={pages}
+              onChange={setPages}
+              rendered={preview?.pages}
+              limit={preview?.limit ?? 2000}
+              hint={
+                <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+                  Jinja2 с кириллицей: <code>{"{{ население }}"}</code>. Вложенность через
+                  точку: <code>{"{{ ВС.людские_ресурсы }}"}</code>. Отсутствующий атрибут
+                  просто останется пустым. Каждая страница уходит в Discord отдельным
+                  эмбедом — так статы длиннее лимита всё-таки помещаются.
+                </p>
+              }
             />
           </div>
 
@@ -188,11 +190,7 @@ export function EntityTypeEditorPage() {
 
         <div style={{ flex: "1 1 320px", minWidth: 280, position: "sticky", top: 16 }}>
           <label>Предпросмотр (как в Discord /me-info)</label>
-          {preview?.error ? (
-            <div className="error">{preview.error}</div>
-          ) : (
-            <div className="embed-preview">{preview?.rendered || " "}</div>
-          )}
+          <PagesPreview pages={preview?.pages} error={preview?.error} />
         </div>
       </div>
     </div>

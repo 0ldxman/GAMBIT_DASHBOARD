@@ -10,6 +10,10 @@ class Config:
     internal_api_key: str = os.environ.get("INTERNAL_API_KEY", "dev-internal-key-change-me")
     # Как часто опрашивать backend на предмет вердов к отправке (сек).
     poll_seconds: int = int(os.environ.get("BOT_POLL_SECONDS", "15"))
+    # Читать текст сообщений. Нужен авто-подмене, но это privileged intent:
+    # без галочки в Developer Portal Discord не пустит бота вообще. Поставьте 0,
+    # если авто-подмена не нужна.
+    message_content: bool = os.environ.get("BOT_MESSAGE_CONTENT", "1") not in ("0", "false", "")
 
 
 config = Config()

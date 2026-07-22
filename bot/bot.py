@@ -4,6 +4,12 @@
   1. Доставка вердов: опрашивает backend, отправляет опубликованные верды через
      вебхук (создаёт/переиспользует), с подменой имени/аватара автора и опц. эмбедом.
   2. Слэш-команды: /about, /me-info, /ping-master, /register (модалка из формы проекта).
+  3. Речь от лица сущности: команда /say и авто-подмена сообщений в каналах,
+     где мастер её включил (/say-as выбирает сущность, когда их несколько).
+
+ВАЖНО: авто-подмене нужен MESSAGE CONTENT INTENT (Developer Portal → Bot →
+Privileged Gateway Intents). Без него бот не видит текст сообщений и подменять
+их не сможет — команда /say при этом продолжит работать.
 """
 
 import io
@@ -24,8 +30,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
 
 intents = discord.Intents.default()
+# Нужен авто-подмене: без него сообщения приходят с пустым content.
+intents.message_content = config.message_content
 bot = commands.Bot(command_prefix="!", intents=intents)
 api = ApiClient()
+
+# Discord режет content сообщения на 2000 символах.
+MESSAGE_LIMIT = 2000
+# Каналы с авто-подменой. Список обновляется задачей ниже, чтобы не ходить
+# в backend на каждое сообщение сервера.
+proxy_channel_ids: set[int] = set()
 
 
 def _parse_color(value: str) -> Optional[discord.Color]:
@@ -82,6 +96,22 @@ async def _ensure_webhook(channel: discord.TextChannel, project_id: Optional[int
     webhook = await channel.create_webhook(name="Gambit Dashboard")
     await api.save_webhook(channel.id, webhook.id, webhook.token or "", webhook.url, project_id)
     return webhook
+
+
+async def _webhook_target(
+    channel: discord.abc.Messageable, project_id: Optional[int]
+) -> tuple[discord.Webhook, Any]:
+    """Вебхук и ветка для отправки. У ветки своего вебхука нет — берём родительский."""
+    thread = discord.utils.MISSING
+    if isinstance(channel, discord.Thread):
+        parent = channel.parent
+        if parent is None:
+            raise RuntimeError("Ветка без родительского канала")
+        thread = channel
+        channel = parent
+    if not isinstance(channel, discord.TextChannel):
+        raise RuntimeError("Канал не текстовый")
+    return await _ensure_webhook(channel, project_id), thread
 
 
 @tasks.loop(seconds=config.poll_seconds)
@@ -143,6 +173,8 @@ async def on_ready() -> None:
         logger.exception("Не удалось синхронизировать команды")
     if not deliver_posts.is_running():
         deliver_posts.start()
+    if not refresh_proxy_channels.is_running():
+        refresh_proxy_channels.start()
     logger.info("Бот запущен как %s", bot.user)
 
 
@@ -158,8 +190,22 @@ async def me_info(interaction: discord.Interaction) -> None:
             "За вами не закреплена сущность в этом проекте.", ephemeral=True
         )
         return
-    embed = discord.Embed(title=data["label"], description=data["rendered"] or "—")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Описание может не влезть в один эмбед — мастер разбивает его на страницы.
+    # Заголовок и картинка идут только на первой, дальше сплошной текст.
+    pages: list[str] = data.get("pages") or [data.get("rendered") or ""]
+    embeds: list[discord.Embed] = []
+    for index, page in enumerate(pages[:10]):  # больше 10 эмбедов Discord не примет
+        embed = discord.Embed(
+            title=data["label"] if index == 0 else None,
+            description=page or "—",
+        )
+        if index == 0 and data.get("picture_url"):
+            embed.set_thumbnail(url=data["picture_url"])
+        if len(pages) > 1:
+            embed.set_footer(text=f"Страница {index + 1} из {len(pages)}")
+        embeds.append(embed)
+    await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
 
 @bot.tree.command(name="ping-master", description="Позвать мастера — уведомление уйдёт в дашборд")
@@ -273,6 +319,231 @@ async def about_autocomplete(
     ][:25]
 
 
+# ---------- речь от лица сущности ----------
+async def _speak_as(
+    channel: discord.abc.Messageable,
+    entity: dict[str, Any],
+    project_id: Optional[int],
+    content: str,
+    files: Optional[list[discord.File]] = None,
+) -> None:
+    """Отправить сообщение вебхуком: имя и аватарка — от сущности."""
+    webhook, thread = await _webhook_target(channel, project_id)
+    await webhook.send(
+        content=content[:MESSAGE_LIMIT] or discord.utils.MISSING,
+        username=entity["label"][:80],
+        # Пустой picture_url — сущности не задали картинку либо backend не знает
+        # своего публичного адреса; тогда уйдёт аватарка вебхука по умолчанию.
+        avatar_url=entity.get("picture_url") or discord.utils.MISSING,
+        files=files or discord.utils.MISSING,
+        thread=thread,
+        wait=False,
+    )
+
+
+class SayModal(discord.ui.Modal):
+    """Ввод реплики. Модалка, а не аргумент команды: в ней есть переносы строк."""
+
+    def __init__(self, entity: dict[str, Any], project_id: Optional[int]) -> None:
+        super().__init__(title=f"От лица: {entity['label']}"[:45])
+        self.entity = entity
+        self.project_id = project_id
+        self.text = discord.ui.TextInput(
+            label="Сообщение",
+            style=discord.TextStyle.paragraph,
+            max_length=MESSAGE_LIMIT,
+            required=True,
+        )
+        self.add_item(self.text)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            await _speak_as(
+                interaction.channel, self.entity, self.project_id, str(self.text.value)
+            )
+        except (discord.DiscordException, RuntimeError):
+            logger.exception("Не удалось отправить сообщение от лица сущности")
+            await interaction.response.send_message(
+                "Не удалось отправить сообщение. Проверьте, что у бота есть право "
+                "«Управление вебхуками» в этом канале.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message("Отправлено ✅", ephemeral=True)
+
+
+class EntitySelect(discord.ui.Select):
+    """Выбор сущности, когда доступ в канал даёт сразу несколько."""
+
+    def __init__(self, ctx: dict[str, Any], remember: bool) -> None:
+        options = [
+            discord.SelectOption(label=c["label"][:100], value=str(c["entity_id"]))
+            for c in ctx["candidates"][:25]
+        ]
+        super().__init__(placeholder="От чьего лица говорить…", options=options)
+        self.ctx = ctx
+        self.remember = remember
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        entity_id = int(self.values[0])
+        entity = next(
+            (c for c in self.ctx["candidates"] if c["entity_id"] == entity_id), None
+        )
+        if entity is None:
+            await interaction.response.send_message("Сущность не найдена.", ephemeral=True)
+            return
+        if self.remember:
+            await api.set_proxy_choice(
+                interaction.guild_id, interaction.channel_id, interaction.user.id, entity_id
+            )
+            await interaction.response.send_message(
+                f"В этом канале вы говорите от лица «{entity['label']}». "
+                "Сменить — той же командой.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(SayModal(entity, self.ctx.get("project_id")))
+
+
+class EntityChoiceView(discord.ui.View):
+    def __init__(self, ctx: dict[str, Any], remember: bool) -> None:
+        super().__init__(timeout=120)
+        self.add_item(EntitySelect(ctx, remember))
+
+
+async def _proxy_ctx(interaction: discord.Interaction) -> Optional[dict[str, Any]]:
+    """Контекст подмены для команды. None — отвечать уже не нужно."""
+    if interaction.guild_id is None:
+        await interaction.response.send_message("Команда доступна только на сервере.", ephemeral=True)
+        return None
+    try:
+        ctx = await api.proxy_context(
+            interaction.guild_id, interaction.channel_id or 0, interaction.user.id
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось получить контекст подмены")
+        await interaction.response.send_message("Backend недоступен.", ephemeral=True)
+        return None
+    if ctx is None:
+        await interaction.response.send_message(
+            "Не удалось определить проект этого канала.", ephemeral=True
+        )
+        return None
+    if not ctx["candidates"]:
+        await interaction.response.send_message(
+            "За вами не закреплена сущность в этом проекте.", ephemeral=True
+        )
+        return None
+    return ctx
+
+
+@bot.tree.command(name="say", description="Написать сообщение от лица своей сущности")
+async def say(interaction: discord.Interaction) -> None:
+    ctx = await _proxy_ctx(interaction)
+    if ctx is None:
+        return
+    if ctx.get("entity"):
+        await interaction.response.send_modal(SayModal(ctx["entity"], ctx.get("project_id")))
+        return
+    await interaction.response.send_message(
+        "У вас несколько сущностей в этом канале — выберите, от чьего лица говорить:",
+        view=EntityChoiceView(ctx, remember=False),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="say-as", description="Выбрать сущность, от лица которой вы говорите в этом канале"
+)
+async def say_as(interaction: discord.Interaction) -> None:
+    """Запоминает выбор — им пользуется и /say, и авто-подмена."""
+    ctx = await _proxy_ctx(interaction)
+    if ctx is None:
+        return
+    if len(ctx["candidates"]) == 1:
+        await interaction.response.send_message(
+            f"В этом канале у вас одна сущность — «{ctx['candidates'][0]['label']}». "
+            "Выбирать не из чего.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.send_message(
+        "От лица какой сущности вы говорите в этом канале?",
+        view=EntityChoiceView(ctx, remember=True),
+        ephemeral=True,
+    )
+
+
+@tasks.loop(seconds=60)
+async def refresh_proxy_channels() -> None:
+    global proxy_channel_ids
+    try:
+        ids = await api.proxy_channels()
+    except Exception:  # noqa: BLE001 — старый список лучше пустого
+        logger.exception("Не удалось обновить список каналов авто-подмены")
+        return
+    proxy_channel_ids = {int(i) for i in ids}
+
+
+@refresh_proxy_channels.before_loop
+async def _before_refresh() -> None:
+    await bot.wait_until_ready()
+
+
+@bot.event
+async def on_message(message: discord.Message) -> None:
+    """Авто-подмена: сообщение игрока переотправляется от лица его сущности."""
+    if message.guild is None or message.author.bot or message.webhook_id is not None:
+        return
+    # Ветка наследует настройку родительского канала: отыгрыш часто уходит в ветки.
+    channel = message.channel
+    parent_id = channel.parent_id if isinstance(channel, discord.Thread) else None
+    if channel.id not in proxy_channel_ids and parent_id not in proxy_channel_ids:
+        return
+    # Настройки и привязки сущностей живут на самом канале, а не на ветке.
+    lookup_id = channel.id if channel.id in proxy_channel_ids else parent_id
+
+    try:
+        ctx = await api.proxy_context(message.guild.id, lookup_id, message.author.id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Авто-подмена: backend недоступен")
+        return
+    if ctx is None or not ctx.get("auto_proxy") or not ctx["candidates"]:
+        return
+
+    if ctx.get("entity") is None:
+        # Подменять наугад нельзя: сообщение уйдёт под чужим флагом. Просим выбрать.
+        await channel.send(
+            f"{message.author.mention}, в этом канале у вас несколько сущностей — "
+            "выберите одну командой `/say-as`, иначе подмена не работает.",
+            delete_after=20,
+        )
+        return
+
+    files: list[discord.File] = []
+    for attachment in message.attachments:
+        try:
+            files.append(await attachment.to_file())
+        except discord.DiscordException:
+            logger.warning("Вложение %s не перенесено", attachment.filename)
+
+    # Переслать нечего (стикер, только эмбед) — вебхук такое не примет,
+    # да и удалять исходное сообщение в этом случае незачем.
+    if not message.content and not files:
+        return
+
+    try:
+        await _speak_as(channel, ctx["entity"], ctx.get("project_id"), message.content, files)
+    except (discord.DiscordException, RuntimeError):
+        # Не смогли переотправить — исходное сообщение оставляем на месте.
+        logger.exception("Авто-подмена не удалась в канале %s", channel.id)
+        return
+    try:
+        await message.delete()
+    except discord.DiscordException:
+        logger.warning("Не удалось удалить исходное сообщение %s", message.id)
+
+
 class RegistrationModal(discord.ui.Modal):
     def __init__(self, form: dict[str, Any]) -> None:
         super().__init__(title=form.get("title", "Регистрация")[:45])
@@ -334,7 +605,15 @@ async def register(interaction: discord.Interaction) -> None:
 def main() -> None:
     if not config.discord_token:
         raise SystemExit("DISCORD_BOT_TOKEN не задан")
-    bot.run(config.discord_token)
+    try:
+        bot.run(config.discord_token)
+    except discord.PrivilegedIntentsRequired:
+        # Иначе в логах только стектрейс, из которого не видно, что чинить.
+        raise SystemExit(
+            "Discord не пустил бота: включите MESSAGE CONTENT INTENT в Developer "
+            "Portal → Bot → Privileged Gateway Intents. Он нужен авто-подмене "
+            "сообщений. Если она не нужна — запустите с BOT_MESSAGE_CONTENT=0."
+        )
 
 
 if __name__ == "__main__":

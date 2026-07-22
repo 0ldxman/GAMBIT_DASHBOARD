@@ -82,6 +82,7 @@ export function ChannelsTab({ projectId }: { projectId: number }) {
           {cat.channels.map((ch) => (
             <ChannelRow
               key={ch.channel_id}
+              projectId={projectId}
               channel={ch}
               onAccess={() => setAccess(ch)}
               onDelete={() => removeChannel(ch)}
@@ -99,6 +100,7 @@ export function ChannelsTab({ projectId }: { projectId: number }) {
           {tree.data.loose.map((ch) => (
             <ChannelRow
               key={ch.channel_id}
+              projectId={projectId}
               channel={ch}
               onAccess={() => setAccess(ch)}
               onDelete={() => removeChannel(ch)}
@@ -133,14 +135,30 @@ export function ChannelsTab({ projectId }: { projectId: number }) {
 }
 
 function ChannelRow({
+  projectId,
   channel,
   onAccess,
   onDelete,
 }: {
+  projectId: number;
   channel: ChannelNode;
   onAccess: () => void;
   onDelete: () => void;
 }) {
+  const [proxy, setProxy] = useState(channel.auto_proxy);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function toggleProxy(value: boolean) {
+    setProxy(value);
+    setErr(null);
+    try {
+      await api.updateChannelSettings(projectId, channel.channel_id, { auto_proxy: value });
+    } catch (e) {
+      setProxy(!value); // не сохранилось — возвращаем галочку на место
+      setErr(String(e));
+    }
+  }
+
   return (
     <div className="row spread channel-row">
       <span>
@@ -150,8 +168,22 @@ function ChannelRow({
             доступ: {channel.entities.map((e) => e.entity_label).join(", ")}
           </span>
         )}
+        {err && <span className="error" style={{ fontSize: 13, marginLeft: 8 }}>{err}</span>}
       </span>
-      <div className="row" style={{ gap: 6 }}>
+      <div className="row" style={{ gap: 6, alignItems: "center" }}>
+        <label
+          className="row muted"
+          style={{ margin: 0, fontSize: 13, whiteSpace: "nowrap" }}
+          title="Сообщения игрока уходят от лица его сущности: имя и аватарка подменяются вебхуком"
+        >
+          <input
+            type="checkbox"
+            checked={proxy}
+            style={{ width: "auto", marginRight: 6 }}
+            onChange={(e) => toggleProxy(e.target.checked)}
+          />
+          авто-подмена
+        </label>
         <button className="ghost" onClick={onAccess}>
           Доступ
         </button>

@@ -17,12 +17,14 @@ import type {
   Member,
   Relation,
   Post,
+  PostTemplate,
   Project,
   ProjectRole,
   ProjectStats,
   Registration,
   RegistrationForm,
-  TemplatePreview,
+  TemplateField,
+  TemplatePages,
 } from "./types";
 
 const TOKEN_KEY = "gambit_token";
@@ -159,11 +161,12 @@ export const api = {
     request<EntityType>("PATCH", `/projects/${pid}/entity-types/${tid}`, data),
   deleteType: (pid: number, tid: number) =>
     request<void>("DELETE", `/projects/${pid}/entity-types/${tid}`),
-  previewTemplate: (
+  // Предпросмотр всех страниц сразу — с длиной каждой готовой страницы.
+  previewPages: (
     pid: number,
-    data: { template: string; attributes: Record<string, unknown>; label: string },
+    data: { pages: string[]; attributes: Record<string, unknown>; label: string },
   ) =>
-    request<TemplatePreview>("POST", `/projects/${pid}/entity-types/preview`, data),
+    request<TemplatePages>("POST", `/projects/${pid}/entity-types/preview-pages`, data),
 
   // entities
   listEntities: (pid: number) =>
@@ -177,7 +180,7 @@ export const api = {
   deleteEntity: (pid: number, eid: number) =>
     request<void>("DELETE", `/projects/${pid}/entities/${eid}`),
   renderEntity: (pid: number, eid: number) =>
-    request<TemplatePreview>("GET", `/projects/${pid}/entities/${eid}/render`),
+    request<TemplatePages>("GET", `/projects/${pid}/entities/${eid}/render`),
 
   // участники сущности (несколько игроков с ролями)
   listMembers: (pid: number, eid: number) =>
@@ -244,6 +247,26 @@ export const api = {
     request<Post>(
       "POST",
       `/projects/${pid}/posts/${postId}/schedule?scheduled_at=${encodeURIComponent(scheduledAt)}`,
+    ),
+
+  // шаблоны вердов
+  templateFields: (pid: number) =>
+    request<TemplateField[]>("GET", `/projects/${pid}/post-templates/fields`),
+  listPostTemplates: (pid: number) =>
+    request<PostTemplate[]>("GET", `/projects/${pid}/post-templates`),
+  createPostTemplate: (
+    pid: number,
+    data: { name: string; fields: string[]; data: Record<string, unknown> },
+  ) => request<PostTemplate>("POST", `/projects/${pid}/post-templates`, data),
+  deletePostTemplate: (pid: number, tid: number) =>
+    request<void>("DELETE", `/projects/${pid}/post-templates/${tid}`),
+
+  // настройки канала (авто-подмена от лица сущности)
+  updateChannelSettings: (pid: number, channelId: string, data: { auto_proxy: boolean }) =>
+    request<{ discord_channel_id: string; auto_proxy: boolean }>(
+      "PATCH",
+      `/projects/${pid}/channels/settings/${channelId}`,
+      data,
     ),
 
   // вложения (multipart, поэтому мимо общего request())

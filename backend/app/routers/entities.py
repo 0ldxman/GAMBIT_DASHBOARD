@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.access import sync_channel_access
 from app.access import sync_entity_channels
 from app.database import get_db
+from app.descriptions import render_entity_pages
 from app.discord_api import DiscordError
 from app.discord_api import get_guild_member
 from app.models import Entity
@@ -33,9 +34,10 @@ from app.schemas import MemberOut
 from app.schemas import MemberUpdate
 from app.schemas import RelationCreate
 from app.schemas import RelationOut
-from app.schemas import TemplatePreviewResponse
+from app.schemas import RenderedPage
+from app.schemas import TemplatePagesResponse
 from app.security import require_master
-from app.templating import render_entity_template
+from app.templating import PAGE_SOFT_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -143,19 +145,20 @@ async def delete_entity(
             logger.warning("Права канала %s не пересчитаны: %s", channel_id, exc)
 
 
-@router.get("/{entity_id}/render", response_model=TemplatePreviewResponse)
+@router.get("/{entity_id}/render", response_model=TemplatePagesResponse)
 async def render_entity(
     project_id: int, entity_id: int, db: AsyncSession = Depends(get_db)
-) -> TemplatePreviewResponse:
-    """Отрендерить embed сущности по шаблону её типа (для команды /me-info бота)."""
+) -> TemplatePagesResponse:
+    """Страницы карточки сущности — то же, что покажет /me-info в Discord."""
     entity = await get_entity_or_404(project_id, entity_id, db)
-    template = ""
-    if entity.type_id is not None:
-        et = await db.get(EntityType, entity.type_id)
-        if et is not None:
-            template = et.attributes_template
-    rendered = render_entity_template(template, entity.attributes, label=entity.label)
-    return TemplatePreviewResponse(rendered=rendered)
+    rendered = await render_entity_pages(entity, db)
+    return TemplatePagesResponse(
+        pages=[
+            RenderedPage(rendered=text, length=len(text), over_limit=len(text) > PAGE_SOFT_LIMIT)
+            for text in rendered
+        ],
+        limit=PAGE_SOFT_LIMIT,
+    )
 
 
 # ---------- участники ----------

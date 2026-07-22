@@ -9,6 +9,7 @@ from app import discord_api
 from app.access import sync_channel_access
 from app.database import get_db
 from app.discord_api import DiscordError
+from app.models import ChannelSetting
 from app.models import Entity
 from app.models import EntityChannel
 from app.models import ProjectChannel
@@ -17,6 +18,8 @@ from app.schemas import CategoryNodeOut
 from app.schemas import ChannelCreate
 from app.schemas import ChannelNodeOut
 from app.schemas import ChannelOut
+from app.schemas import ChannelSettingOut
+from app.schemas import ChannelSettingUpdate
 from app.schemas import ChannelTreeOut
 from app.schemas import ChannelUpdate
 from app.schemas import DiscordChannelOut
@@ -62,6 +65,17 @@ async def _entity_links(project_id: int, db: AsyncSession) -> dict[int, list[Ent
     return links
 
 
+async def _auto_proxy_ids(project_id: int, db: AsyncSession) -> set[int]:
+    """Каналы проекта с включённой авто-подменой."""
+    result = await db.execute(
+        select(ChannelSetting.discord_channel_id).where(
+            ChannelSetting.project_id == project_id,
+            ChannelSetting.auto_proxy.is_(True),
+        )
+    )
+    return {row[0] for row in result.all()}
+
+
 async def _project_rows(project_id: int, db: AsyncSession) -> list[ProjectChannel]:
     result = await db.execute(
         select(ProjectChannel).where(ProjectChannel.project_id == project_id)
@@ -81,6 +95,7 @@ async def channel_tree(project_id: int, db: AsyncSession = Depends(get_db)) -> C
     categories = [r for r in rows if r.channel_type == "category"]
     registered = {r.channel_id: r for r in rows if r.channel_type != "category"}
     links = await _entity_links(project_id, db)
+    proxied = await _auto_proxy_ids(project_id, db)
 
     if not project.guild_id:
         return ChannelTreeOut(error="У проекта не выбран Discord-сервер")
@@ -113,6 +128,7 @@ async def channel_tree(project_id: int, db: AsyncSession = Depends(get_db)) -> C
             position=ch["position"],
             registered_id=row.id if row else None,
             entities=links.get(cid, []),
+            auto_proxy=cid in proxied,
         )
 
     out_categories: list[CategoryNodeOut] = []
@@ -170,6 +186,47 @@ async def available_channels(
         if ch["type"] in CONTENT_TYPES
         and (ch["parent_id"] in category_ids or ch["channel_id"] in registered_ids)
     ]
+
+
+# ---------- настройки канала ----------
+@router.get("/settings", response_model=list[ChannelSettingOut])
+async def list_channel_settings(
+    project_id: int, db: AsyncSession = Depends(get_db)
+) -> list[ChannelSetting]:
+    await get_project_or_404(project_id, db)
+    result = await db.execute(
+        select(ChannelSetting).where(ChannelSetting.project_id == project_id)
+    )
+    return list(result.scalars().all())
+
+
+@router.patch("/settings/{discord_channel_id}", response_model=ChannelSettingOut)
+async def update_channel_settings(
+    project_id: int,
+    discord_channel_id: int,
+    body: ChannelSettingUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> ChannelSetting:
+    """Настройки конкретного канала. Строка заводится при первом изменении."""
+    await get_project_or_404(project_id, db)
+    result = await db.execute(
+        select(ChannelSetting).where(ChannelSetting.discord_channel_id == discord_channel_id)
+    )
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        setting = ChannelSetting(project_id=project_id, discord_channel_id=discord_channel_id)
+        db.add(setting)
+    elif setting.project_id != project_id:
+        # Канал уникален по всей базе: два проекта не должны спорить за его настройки.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Канал настроен в другом проекте",
+        )
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(setting, field, value)
+    await db.commit()
+    await db.refresh(setting)
+    return setting
 
 
 @router.get("", response_model=list[ChannelOut])

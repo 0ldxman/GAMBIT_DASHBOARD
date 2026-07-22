@@ -30,6 +30,9 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       UPLOAD_DIR: /data/uploads
+      # Публичный префикс вложений, напр. https://ваш-домен/api — по нему
+      # Discord скачивает аватарку сущности для подменённых сообщений.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:8080"]}'
     volumes:
       - gambit_uploads:/data/uploads
@@ -46,6 +49,9 @@ services:
       API_BASE: http://backend:8000
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
       BOT_POLL_SECONDS: ${BOT_POLL_SECONDS:-15}
+      # 0 отключает чтение сообщений: авто-подмена работать не будет,
+      # зато бот запустится без MESSAGE CONTENT INTENT.
+      BOT_MESSAGE_CONTENT: ${BOT_MESSAGE_CONTENT:-1}
 
   frontend:
     build: ./frontend

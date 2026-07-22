@@ -118,6 +118,9 @@ class EntityTypeBase(BaseModel):
     slug: str
     label: str
     attributes_template: str = ""
+    # Страницы описания: каждая уходит отдельным эмбедом. Пусто — используется
+    # attributes_template как единственная страница (типы до появления страниц).
+    description_pages: list[str] = Field(default_factory=list)
     # Структура атрибутов по умолчанию — с неё начинается новая сущность типа.
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
 
@@ -130,6 +133,7 @@ class EntityTypeUpdate(BaseModel):
     slug: Optional[str] = None
     label: Optional[str] = None
     attributes_template: Optional[str] = None
+    description_pages: Optional[list[str]] = None
     attributes_schema: Optional[dict[str, Any]] = None
 
 
@@ -139,6 +143,7 @@ class EntityTypeOut(ORMModel):
     slug: str
     label: str
     attributes_template: str
+    description_pages: list[str] = Field(default_factory=list)
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -148,6 +153,9 @@ class EntityBase(BaseModel):
     type_id: Optional[int] = None
     picture: str = ""
     attributes: dict[str, Any] = Field(default_factory=dict)
+    # Особое описание замещает страницы типа целиком.
+    use_custom_description: bool = False
+    description_pages: list[str] = Field(default_factory=list)
 
 
 class EntityCreate(EntityBase):
@@ -159,6 +167,8 @@ class EntityUpdate(BaseModel):
     type_id: Optional[int] = None
     picture: Optional[str] = None
     attributes: Optional[dict[str, Any]] = None
+    use_custom_description: Optional[bool] = None
+    description_pages: Optional[list[str]] = None
 
 
 # ---------- участники сущности ----------
@@ -224,6 +234,8 @@ class EntityOut(ORMModel):
     label: str
     picture: str
     attributes: dict[str, Any]
+    use_custom_description: bool = False
+    description_pages: list[str] = Field(default_factory=list)
     members: list[MemberOut] = Field(default_factory=list)
 
 
@@ -303,6 +315,8 @@ class ChannelNodeOut(BaseModel):
     # id строки project_channel, если канал зарегистрирован в проекте отдельно.
     registered_id: Optional[int] = None
     entities: list[EntityLinkOut] = Field(default_factory=list)
+    # Сообщения игроков подменяются вебхуком от лица их сущности.
+    auto_proxy: bool = False
 
 
 class CategoryNodeOut(BaseModel):
@@ -322,15 +336,23 @@ class ChannelTreeOut(BaseModel):
     error: Optional[str] = None
 
 
-# ---------- template preview ----------
-class TemplatePreviewRequest(BaseModel):
-    template: str
+# ---------- предпросмотр описаний ----------
+class TemplatePagesRequest(BaseModel):
+    pages: list[str] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
     label: str = ""
 
 
-class TemplatePreviewResponse(BaseModel):
+class RenderedPage(BaseModel):
     rendered: str
+    # Длина готового текста — она и упирается в лимит эмбеда, а не длина шаблона.
+    length: int
+    over_limit: bool
+
+
+class TemplatePagesResponse(BaseModel):
+    pages: list[RenderedPage] = Field(default_factory=list)
+    limit: int
     error: Optional[str] = None
 
 
@@ -437,6 +459,48 @@ class PostOut(ORMModel):
     embed_author_icon_url: str
     embed_image_url: str
     embed_color: str
+
+
+# ---------- шаблоны вердов ----------
+class PostTemplateCreate(BaseModel):
+    name: str
+    # Имена полей верда, которые шаблон переносит, и их значения.
+    fields: list[str] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class PostTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    fields: Optional[list[str]] = None
+    data: Optional[dict[str, Any]] = None
+
+
+class PostTemplateOut(ORMModel):
+    id: int
+    project_id: int
+    name: str
+    fields: list[str]
+    data: dict[str, Any]
+    created_at: datetime
+
+
+class TemplateFieldOut(BaseModel):
+    """Поле верда, которое можно положить в шаблон (для галочек в интерфейсе)."""
+
+    key: str
+    label: str
+
+
+# ---------- настройки канала ----------
+class ChannelSettingOut(ORMModel):
+    id: int
+    project_id: int
+    discord_channel_id: DiscordId
+    auto_proxy: bool
+
+
+class ChannelSettingUpdate(BaseModel):
+    auto_proxy: Optional[bool] = None
 
 
 # ---------- registration form ----------
@@ -575,7 +639,38 @@ class AboutProjectOut(BaseModel):
 class MeInfoOut(BaseModel):
     entity_id: int
     label: str
+    # Первая страница — для совместимости со старым ботом.
     rendered: str
+    pages: list[str] = Field(default_factory=list)
+    picture_url: str = ""
+
+
+# ---------- речь от лица сущности ----------
+class ProxyEntityOut(BaseModel):
+    entity_id: int
+    label: str
+    # Абсолютный URL картинки: аватар вебхука Discord скачивает сам, поэтому
+    # внутренний путь /uploads/... ему не подходит.
+    picture_url: str = ""
+
+
+class ProxyContextOut(BaseModel):
+    """Всё, что боту нужно знать про сообщение игрока в канале."""
+
+    project_id: int
+    auto_proxy: bool
+    # Сущность, от лица которой говорить. None — выбрать не из чего либо неясно.
+    entity: Optional[ProxyEntityOut] = None
+    candidates: list[ProxyEntityOut] = Field(default_factory=list)
+    # Кандидатов несколько, а явного выбора игрок не сделал.
+    ambiguous: bool = False
+
+
+class ProxyChoiceIn(BaseModel):
+    guild_id: DiscordId
+    discord_channel_id: DiscordId
+    player_id: DiscordId
+    entity_id: int
 
 
 class PendingPostOut(BaseModel):

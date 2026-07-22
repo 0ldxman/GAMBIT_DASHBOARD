@@ -132,8 +132,12 @@ class EntityType(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("project.id", ondelete="CASCADE"))
     slug: Mapped[str] = mapped_column(String(100))
     label: Mapped[str] = mapped_column(String(200))
-    # Jinja2-шаблон текста embed (напр. для /me-info). Значения из entity.attributes.
+    # Первая страница описания. Оставлено ради старых записей и как зеркало
+    # description_pages[0]; актуальный источник — description_pages.
     attributes_template: Mapped[str] = mapped_column(Text, default="")
+    # Страницы описания: список Jinja2-шаблонов, каждый уходит отдельным эмбедом.
+    # У эмбеда есть предел длины, поэтому длинные статы разбиваются на страницы.
+    description_pages: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     # Заготовка атрибутов: структура JSON со значениями по умолчанию. Новая сущность
     # этого типа создаётся с её копией, чтобы мастер не набирал поля заново.
     attributes_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
@@ -153,9 +157,14 @@ class Entity(Base):
         ForeignKey("entity_type.id", ondelete="SET NULL"), nullable=True
     )
     label: Mapped[str] = mapped_column(String(200))
+    # Аватар сущности: URL или путь /uploads/... Им же подписываются сообщения,
+    # отправленные игроком от лица сущности.
     picture: Mapped[str] = mapped_column(String(500), default="")
-    # Свободный key-value JSON. Значения подставляются в attributes_template типа.
+    # Свободный key-value JSON. Значения подставляются в шаблон описания типа.
     attributes: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Особое описание: страницы этой сущности вместо страниц её типа.
+    use_custom_description: Mapped[bool] = mapped_column(default=False)
+    description_pages: Mapped[list[Any]] = mapped_column(JSONB, default=list)
 
     project: Mapped[Project] = relationship(back_populates="entities")
     type: Mapped[Optional[EntityType]] = relationship(back_populates="entities")
@@ -299,6 +308,63 @@ class Post(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="posts")
+
+
+class PostTemplate(Base):
+    """Заготовка верда: набор полей, снятых с готового верда.
+
+    Мастер сам выбирает, что шаблон переносит (отправителя, текст, канал, эмбед…),
+    поэтому храним только выбранные поля: список имён в fields и их значения в data.
+    Так шаблон «подпись МИДа» не тянет за собой чужой текст и канал.
+    """
+
+    __tablename__ = "post_template"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("project.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(200))
+    fields: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChannelSetting(Base):
+    """Настройки конкретного Discord-канала внутри проекта.
+
+    Отдельная таблица, потому что состав каналов в дашборде не хранится (он всегда
+    читается с сервера) — а настройка должна пережить пересборку списка.
+    """
+
+    __tablename__ = "channel_setting"
+    __table_args__ = (
+        UniqueConstraint("discord_channel_id", name="uq_channel_setting_channel"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("project.id", ondelete="CASCADE"))
+    discord_channel_id: Mapped[int] = mapped_column(BigInteger)
+    # Сообщения игрока подменяются сообщением вебхука от лица его сущности.
+    auto_proxy: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProxyChoice(Base):
+    """От лица какой сущности игрок говорит в конкретном канале.
+
+    Нужно, когда в канал игрока пускают сразу две его сущности: подменять вслепую
+    нельзя, поэтому запоминаем явный выбор игрока (команда /say-as).
+    """
+
+    __tablename__ = "proxy_choice"
+    __table_args__ = (
+        UniqueConstraint("player_id", "discord_channel_id", name="uq_proxy_choice"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(BigInteger)
+    discord_channel_id: Mapped[int] = mapped_column(BigInteger)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entity.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ChannelWebhook(Base):

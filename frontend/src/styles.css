@@ -218,6 +218,12 @@ th { color: var(--muted); font-weight: 500; }
 .entity-aside { position: sticky; top: 16px; }
 .entity-picture { width: 64px; height: 64px; border-radius: 12px; object-fit: cover; }
 
+/* --- страницы описания: каждая уходит отдельным эмбедом --- */
+.page-block {
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+
 /* --- игроки сущности --- */
 .member-row {
   display: grid; grid-template-columns: minmax(140px, 1fr) minmax(120px, 180px) auto auto;
