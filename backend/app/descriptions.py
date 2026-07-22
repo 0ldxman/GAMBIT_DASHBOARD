@@ -68,6 +68,54 @@ async def entity_computed(
     return compute(await entity_fields(entity, db), entity.attributes)
 
 
+def _related_card(entity: Entity, entity_type: EntityType | None) -> dict[str, Any]:
+    """Вторая сторона связи так, как её видно из шаблона.
+
+    Кроме названия отдаются её атрибуты и посчитанные формулы — тогда список
+    структур страны пишется одной строкой:
+
+        {{ связи.принадлежит | строки("{название} — {описание}") }}
+
+    Короткое имя атрибута ставится только на свободное: имена самой связи
+    (`название`, `тип`, `направление`, `id`) важнее — то же правило, что и у
+    формул. Полный доступ есть всегда: `{атрибуты.описание}` и `{выч.мощь}`.
+    """
+    attributes = entity.attributes if isinstance(entity.attributes, dict) else {}
+    tree, _ = compute(
+        merge(entity_type.computed if entity_type else [], entity.computed), attributes
+    )
+    card: dict[str, Any] = dict(attributes)
+    card.update(template_extra(tree, attributes))
+    card.update(
+        {
+            "название": entity.label,
+            "тип_сущности": entity_type.label if entity_type else "",
+            "атрибуты": attributes,
+            "id": entity.id,
+        }
+    )
+    return card
+
+
+async def _related_cards(ids: set[int], db: AsyncSession) -> dict[int, dict[str, Any]]:
+    """Карточки вторых сторон: сущности и их типы двумя запросами на всех."""
+    if not ids:
+        return {}
+    others = list(
+        (await db.execute(select(Entity).where(Entity.id.in_(ids)))).scalars().all()
+    )
+    type_ids = {other.type_id for other in others if other.type_id is not None}
+    types: dict[int, EntityType] = {}
+    if type_ids:
+        rows = await db.execute(select(EntityType).where(EntityType.id.in_(type_ids)))
+        types = {entity_type.id: entity_type for entity_type in rows.scalars()}
+    # Одна и та же сущность встречается в нескольких связях — считаем её раз.
+    return {
+        other.id: _related_card(other, types.get(other.type_id) if other.type_id else None)
+        for other in others
+    }
+
+
 async def entity_extras(entity: Entity, db: AsyncSession) -> dict[str, Any]:
     """Особые переменные шаблона: не атрибуты, а связи сущности с миром.
 
@@ -78,10 +126,14 @@ async def entity_extras(entity: Entity, db: AsyncSession) -> dict[str, Any]:
         {{ игроки | строки("{имя} — {роль}") }}
         Союзники: {{ связи.союзник | строки("{название}") }}
         Входит в: {{ родители | строки("{название} ({тип})") }}
+        Структуры: {{ связи.принадлежит | строки("{название} — {описание}") }}
 
     `родители` и `дети` — только иерархические связи. Взаимные («союзник»,
     «война») иерархии не образуют и живут исключительно в `связи` по своему
     типу, зато видны с обеих сторон.
+
+    В элементе связи лежит не одно название, а вся вторая сторона — её
+    атрибуты и формулы (см. `_related_card`).
     """
     members = (
         await db.execute(
@@ -102,15 +154,13 @@ async def entity_extras(entity: Entity, db: AsyncSession) -> dict[str, Any]:
         )
     ).scalars().all()
 
-    # Названия вторых сторон одним запросом: связей у крупной страны десятки.
+    # Вторые стороны одним запросом: связей у крупной страны десятки. Берутся
+    # целиком, а не одними названиями — из них показываются поля.
     other_ids = {
         relation.child_id if relation.parent_id == entity.id else relation.parent_id
         for relation in relations
     }
-    names: dict[int, str] = {}
-    if other_ids:
-        rows = await db.execute(select(Entity.id, Entity.label).where(Entity.id.in_(other_ids)))
-        names = {row.id: row.label for row in rows}
+    cards = await _related_cards(other_ids, db)
 
     parents: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
@@ -119,12 +169,13 @@ async def entity_extras(entity: Entity, db: AsyncSession) -> dict[str, Any]:
         parent_side = relation.parent_id == entity.id
         other_id = relation.child_id if parent_side else relation.parent_id
         item = {
-            "название": names.get(other_id, ""),
+            **cards.get(other_id, {"название": "", "атрибуты": {}, "id": other_id}),
+            # Имена самой связи ставятся последними: в элементе списка «тип» —
+            # это вид связи, а не тип второй стороны (он в «тип_сущности»).
             "тип": relation.relation_type,
             "направление": ("дочерняя" if parent_side else "родитель")
             if relation.directed
             else "взаимная",
-            "id": other_id,
         }
         if relation.directed:
             (children if parent_side else parents).append(item)
@@ -157,6 +208,19 @@ async def entity_extras(entity: Entity, db: AsyncSession) -> dict[str, Any]:
 # Имя, под которым особые переменные всегда доступны целиком.
 EXTRAS_NAMESPACE = "сущность"
 
+def _sample_side(name: str, kind: str, relation: str, direction: str, **attrs: Any) -> dict:
+    """Вторая сторона для примера — с полями, как у настоящей."""
+    return {
+        **attrs,
+        "название": name,
+        "тип_сущности": kind,
+        "атрибуты": dict(attrs),
+        "тип": relation,
+        "направление": direction,
+        "id": 0,
+    }
+
+
 # Чем наполнить предпросмотр в редакторе ТИПА: настоящей сущности там нет, а
 # увидеть, как ляжет вёрстка со списком игроков и союзников, нужно.
 SAMPLE_EXTRAS: dict[str, Any] = {
@@ -166,17 +230,26 @@ SAMPLE_EXTRAS: dict[str, Any] = {
     ],
     "лидер": "Игрок",
     "родители": [
-        {"название": "Организация", "тип": "член организации", "направление": "родитель", "id": 0}
+        _sample_side("Организация", "Блок", "член организации", "родитель", основана=1949)
     ],
-    "дети": [{"название": "Провинция", "тип": "состав", "направление": "дочерняя", "id": 0}],
+    "дети": [_sample_side("Провинция", "Регион", "состав", "дочерняя", население=120000)],
     "связи": {
         "союзник": [
-            {"название": "Соседняя страна", "тип": "союзник", "направление": "взаимная", "id": 0}
+            _sample_side("Соседняя страна", "Страна", "союзник", "взаимная", столица="Город")
         ],
         "война": [
-            {"название": "Дальняя страна", "тип": "война", "направление": "взаимная", "id": 0}
+            _sample_side("Дальняя страна", "Страна", "война", "взаимная", столица="Другой город")
         ],
-        "состав": [{"название": "Провинция", "тип": "состав", "направление": "дочерняя", "id": 0}],
+        "состав": [_sample_side("Провинция", "Регион", "состав", "дочерняя", население=120000)],
+        "принадлежит": [
+            _sample_side(
+                "Структура",
+                "Структура",
+                "принадлежит",
+                "взаимная",
+                описание="что это и зачем",
+            )
+        ],
     },
     "тип": "Тип сущности",
 }
