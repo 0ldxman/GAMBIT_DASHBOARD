@@ -240,6 +240,7 @@ export function EntityTypeEditorPage() {
               <ComputedEditor
                 fields={computed}
                 onChange={setComputed}
+                scope="type"
                 values={preview?.computed}
                 paths={attrPaths(schema)}
                 onInsert={(text) => {

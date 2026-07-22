@@ -1,20 +1,17 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { ALL_LEVELS, DepthPicker, GroupBox, groupByPath, pathTail } from "./grouping";
+import type { PathGroup } from "./grouping";
+import { useLocalNumber } from "../hooks";
 import type { ComputedField, ComputedValue } from "../types";
 
-/** Разложить пути по общему корню: «бюджет.деньги» и «бюджет.итого» — одна группа. */
-function group<T extends { path: string }>(items: T[]): { root: string; items: T[] }[] {
-  const groups: { root: string; items: T[] }[] = [];
-  for (const item of items) {
-    const root = item.path.includes(".") ? item.path.split(".")[0] : "";
-    const last = groups[groups.length - 1];
-    if (last && last.root === root) last.items.push(item);
-    else groups.push({ root, items: [item] });
-  }
-  return groups;
+/** Формула вместе со своим местом в списке — индекс нужен для правки. */
+interface Placed {
+  field: ComputedField;
+  index: number;
 }
 
-/** Хвост пути без корня: «бюджет.ресурсы.минералы» → «.ресурсы.минералы». */
-const tail = (path: string) => (path.includes(".") ? path.slice(path.indexOf(".")) : path);
+/** Есть ли что группировать: без вложенных путей переключатель не нужен. */
+const hasNesting = (paths: string[]) => paths.some((path) => path.includes("."));
 
 /** Готовое значение или ошибка — одинаково в редакторе и в списке. */
 function Value({ value }: { value?: ComputedValue }) {
@@ -48,6 +45,7 @@ export function ComputedEditor({
   values,
   paths,
   onInsert,
+  scope = "entity",
 }: {
   /** Собственные формулы: их и правит этот редактор. */
   fields: ComputedField[];
@@ -61,14 +59,34 @@ export function ComputedEditor({
   paths: string[];
   /** Вставить `{{ выч.путь }}` в страницу описания. */
   onInsert?: (snippet: string) => void;
+  /** Разделяет память свёрнутых групп и глубины: у типа и у сущности она своя. */
+  scope?: string;
 }) {
   // Куда дописывать путь по клику на подсказку — последняя формула в фокусе.
   const [active, setActive] = useState(0);
+  // Дерево путей — как у атрибутов: «бюджет.ресурсы.минералы» ложится
+  // в «бюджет» → «ресурсы».
+  const [depth, setDepth] = useLocalNumber(`calc:${scope}:depth`, ALL_LEVELS);
   const byPath = new Map((values ?? []).map((v) => [v.path, v]));
   const ownPaths = new Set(fields.map((f) => f.path));
   // Типовые формулы, которые сущность НЕ переопределила: остальные показываются
   // ниже, среди собственных, чтобы не двоить одну и ту же строку.
   const untouched = inherited.filter((f) => !ownPaths.has(f.path));
+
+  const ownTree = useMemo(
+    () =>
+      groupByPath(
+        fields.map((field, index) => ({ field, index })),
+        (item) => item.field.path,
+        depth,
+      ),
+    [fields, depth],
+  );
+  const typeTree = useMemo(
+    () => groupByPath(untouched, (field) => field.path, depth),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inherited, fields, depth],
+  );
 
   function patch(index: number, part: Partial<ComputedField>) {
     onChange(fields.map((f, i) => (i === index ? { ...f, ...part } : f)));
@@ -90,17 +108,22 @@ export function ComputedEditor({
     patch(active, { expr: expr ? `${expr} ${path}` : path });
   }
 
-  function row(field: ComputedField, index: number) {
+  /** Одна формула. `prefix` — путь группы, в шапке он уже написан. */
+  function row({ field, index }: Placed, prefix: string) {
     const overrides = inherited.some((f) => f.path === field.path);
     return (
       <div className="page-block" key={index}>
         <div className="row top" style={{ gap: "var(--s2)" }}>
           <input
             className="grow mono"
-            value={field.path}
-            placeholder="бюджет.деньги"
-            title="Путь поля в дереве формул"
-            onChange={(e) => patch(index, { path: e.target.value })}
+            value={pathTail(field.path, prefix)}
+            placeholder={prefix ? "деньги" : "бюджет.деньги"}
+            title={field.path || "Путь поля в дереве формул"}
+            onChange={(e) =>
+              patch(index, {
+                path: prefix ? `${prefix}.${e.target.value}` : e.target.value,
+              })
+            }
           />
           <input
             className="grow"
@@ -161,7 +184,7 @@ export function ComputedEditor({
           )}
           {field.path.includes(".") && (
             <span className="muted" style={{ fontSize: "var(--fs-micro)" }}>
-              {tail(field.path)}
+              выч.{field.path}
             </span>
           )}
         </div>
@@ -169,34 +192,78 @@ export function ComputedEditor({
     );
   }
 
+  /** Группа формул со своими строками и подгруппами — на любую глубину. */
+  function renderOwnGroup(node: PathGroup<Placed>) {
+    return (
+      <GroupBox
+        key={node.prefix}
+        prefix={node.prefix}
+        name={node.name}
+        flagKey={`calc:${scope}`}
+        count={node.count}
+        addLabel="формула"
+        onAdd={() =>
+          onChange([...fields, { path: `${node.prefix}.`, label: "", expr: "" }])
+        }
+      >
+        {node.items.map((item) => row(item, node.prefix))}
+        {node.groups.map(renderOwnGroup)}
+      </GroupBox>
+    );
+  }
+
+  /** Типовая формула: править её можно только в типе, зато переопределить — тут. */
+  function typeRow(field: ComputedField, prefix: string) {
+    return (
+      <div className="calc-row" key={field.path}>
+        <span title={field.path}>
+          {field.label || pathTail(field.path, prefix)}{" "}
+          <button
+            className="hint-toggle"
+            title="Задать этой сущности свою формулу вместо типовой"
+            onClick={() => onChange([...fields, { ...field }])}
+          >
+            переопределить
+          </button>
+        </span>
+        <Value value={byPath.get(field.path)} />
+      </div>
+    );
+  }
+
+  function renderTypeGroup(node: PathGroup<ComputedField>) {
+    return (
+      <GroupBox
+        key={node.prefix}
+        prefix={node.prefix}
+        name={node.name}
+        flagKey={`calc:${scope}:type`}
+        count={node.count}
+      >
+        {node.items.map((field) => typeRow(field, node.prefix))}
+        {node.groups.map(renderTypeGroup)}
+      </GroupBox>
+    );
+  }
+
   return (
     <div className="stack tight">
+      <div className="row" style={{ justifyContent: "flex-end" }}>
+        <DepthPicker
+          depth={depth}
+          onChange={setDepth}
+          show={hasNesting([...fields, ...inherited].map((f) => f.path))}
+        />
+      </div>
+
       {untouched.length > 0 && (
         <>
           <div className="muted" style={{ fontSize: "var(--fs-cap)" }}>
             Из типа{inheritedFrom ? ` «${inheritedFrom}»` : ""} — правятся в типе
           </div>
           <div className="stack tight calc-from-type">
-            {group(untouched).map((section, gi) => (
-              <div key={gi}>
-                {section.root && <div className="attr-key">{section.root}</div>}
-                {section.items.map((field) => (
-                  <div className="calc-row" key={field.path}>
-                    <span>
-                      {field.label || field.path}{" "}
-                      <button
-                        className="hint-toggle"
-                        title="Задать этой сущности свою формулу вместо типовой"
-                        onClick={() => onChange([...fields, { ...field }])}
-                      >
-                        переопределить
-                      </button>
-                    </span>
-                    <Value value={byPath.get(field.path)} />
-                  </div>
-                ))}
-              </div>
-            ))}
+            {typeTree.items.map((field) => typeRow(field, ""))}
+            {typeTree.groups.map(renderTypeGroup)}
           </div>
         </>
       )}
@@ -212,12 +279,8 @@ export function ComputedEditor({
         </p>
       )}
 
-      {group(fields).map((section, gi) => (
-        <div className="stack tight" key={gi}>
-          {section.root && <div className="attr-key">{section.root}</div>}
-          {section.items.map((field) => row(field, fields.indexOf(field)))}
-        </div>
-      ))}
+      {ownTree.items.map((item) => row(item, ""))}
+      {ownTree.groups.map(renderOwnGroup)}
 
       <div className="row">
         <button
@@ -247,34 +310,52 @@ export function ComputedEditor({
   );
 }
 
-/** Значения формул только для чтения — компактным списком. */
+/** Значения формул только для чтения — компактным деревом. */
 export function ComputedValues({ values }: { values?: ComputedValue[] }) {
   if (!values || values.length === 0) return null;
+
+  function valueRow(value: ComputedValue, prefix: string) {
+    return (
+      <div className="calc-row" key={value.path}>
+        <span title={value.path}>
+          {value.label || pathTail(value.path, prefix)}
+          {value.source === "override" && (
+            <span className="calc-badge" style={{ marginLeft: 6 }}>
+              ⟲
+            </span>
+          )}
+          {value.source === "entity" && (
+            <span className="calc-badge" style={{ marginLeft: 6 }}>
+              своя
+            </span>
+          )}
+        </span>
+        <Value value={value} />
+      </div>
+    );
+  }
+
+  // Здесь только смотрят, поэтому не коробки со сворачиванием, а подписи с
+  // отступом: список значений должен оставаться коротким.
+  function renderGroup(node: PathGroup<ComputedValue>) {
+    return (
+      <div key={node.prefix}>
+        <div className="attr-key" title={node.prefix}>
+          {node.name}
+        </div>
+        <div style={{ paddingLeft: "var(--s3)" }}>
+          {node.items.map((value) => valueRow(value, node.prefix))}
+          {node.groups.map(renderGroup)}
+        </div>
+      </div>
+    );
+  }
+
+  const tree = groupByPath(values, (value) => value.path, ALL_LEVELS);
   return (
     <div className="stack tight" style={{ gap: 0 }}>
-      {group(values).map((section, gi) => (
-        <div key={gi}>
-          {section.root && <div className="attr-key">{section.root}</div>}
-          {section.items.map((value) => (
-            <div className="calc-row" key={value.path}>
-              <span>
-                {value.label || value.path}
-                {value.source === "override" && (
-                  <span className="calc-badge" style={{ marginLeft: 6 }}>
-                    ⟲
-                  </span>
-                )}
-                {value.source === "entity" && (
-                  <span className="calc-badge" style={{ marginLeft: 6 }}>
-                    своя
-                  </span>
-                )}
-              </span>
-              <Value value={value} />
-            </div>
-          ))}
-        </div>
-      ))}
+      {tree.items.map((value) => valueRow(value, ""))}
+      {tree.groups.map(renderGroup)}
     </div>
   );
 }

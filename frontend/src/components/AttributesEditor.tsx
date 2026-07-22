@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { JsonEditor } from "./JsonEditor";
-import { useLocalFlag, useLocalNumber } from "../hooks";
+import { ALL_LEVELS, DepthPicker, GroupBox, groupByPath, pathTail } from "./grouping";
+import type { PathGroup } from "./grouping";
+import { useLocalNumber } from "../hooks";
 
 interface AttrRow {
   key: string;
@@ -60,84 +62,10 @@ export function unflatten(rows: AttrRow[]): Record<string, unknown> {
   return out;
 }
 
-/** Ключ без префикса группы: «ЭКН.энергия.запас» в группе «ЭКН.энергия» — «запас». */
-const leaf = (path: string, prefix: string) =>
-  prefix && path.startsWith(`${prefix}.`) ? path.slice(prefix.length + 1) : path;
-
 /** Строка вместе со своим местом в общем списке — индекс нужен для правки. */
 interface Placed {
   row: AttrRow;
   index: number;
-}
-
-/** Группа атрибутов: свои строки и вложенные группы уровнем ниже. */
-interface GroupNode {
-  /** Полный префикс: «ЭКН» или «ЭКН.энергия». */
-  prefix: string;
-  /** Последний сегмент — им подписана шапка. */
-  name: string;
-  rows: Placed[];
-  groups: GroupNode[];
-  /** Сколько строк внутри со всеми подгруппами. */
-  count: number;
-}
-
-/** Глубина «сколько есть»: путей длиннее вряд ли кто-то заведёт. */
-const ALL_LEVELS = 9;
-
-/** Варианты глубины для переключателя: обычно нужна вся вложенность. */
-const DEPTH_OPTIONS: { label: string; value: number }[] = [
-  { label: "1", value: 1 },
-  { label: "2", value: 2 },
-  { label: "всё", value: ALL_LEVELS },
-];
-
-/**
- * Разложить строки по уровням пути до глубины `depth`.
- *
- * `РЕС.пища.запас` при полной вложенности попадает в «РЕС» → «пища», при
- * глубине 1 — в «РЕС» строкой «пища.запас». Строка, которая на этом уровне
- * заканчивается, остаётся собственной строкой группы и никуда не уезжает.
- *
- * Группа из одной строки не заводится: коробка вокруг единственного поля
- * («ВС» → «танки») только добавляет рамок, поэтому такое поле остаётся строкой
- * родителя с остатком пути в имени.
- */
-export function buildGroups(
-  items: Placed[],
-  depth: number,
-  level = 0,
-): { rows: Placed[]; groups: GroupNode[] } {
-  const rows: Placed[] = [];
-  const buckets = new Map<string, Placed[]>();
-  for (const item of items) {
-    const parts = item.row.key.split(".");
-    if (level >= depth || parts.length <= level + 1) {
-      rows.push(item);
-      continue;
-    }
-    const prefix = parts.slice(0, level + 1).join(".");
-    const bucket = buckets.get(prefix);
-    if (bucket) bucket.push(item);
-    else buckets.set(prefix, [item]);
-  }
-
-  const groups: GroupNode[] = [];
-  for (const [prefix, bucket] of buckets) {
-    if (bucket.length < 2) {
-      rows.push(...bucket);
-      continue;
-    }
-    const inner = buildGroups(bucket, depth, level + 1);
-    groups.push({
-      prefix,
-      name: prefix.slice(prefix.lastIndexOf(".") + 1),
-      rows: inner.rows,
-      groups: inner.groups,
-      count: bucket.length,
-    });
-  }
-  return { rows, groups };
 }
 
 /** Значение строки — список? Тогда правим его построчно, а не JSON-ом. */
@@ -306,7 +234,7 @@ export function AttributesEditor({
       if (needle && !row.key.toLowerCase().includes(needle)) return;
       visible.push({ row, index });
     });
-    return buildGroups(visible, depth);
+    return groupByPath(visible, (item) => item.row.key, depth);
   }, [rows, query, depth]);
 
   const addRow = (prefix: string) => patchRows([...rows, { key: prefix, value: "" }]);
@@ -318,7 +246,7 @@ export function AttributesEditor({
       <div className="attr-row" key={index}>
         <input
           className="mono"
-          value={leaf(row.key, prefix)}
+          value={pathTail(row.key, prefix)}
           placeholder={prefix ? "поле" : "ключ или путь.через.точку"}
           onChange={(e) =>
             patchRows(
@@ -369,19 +297,19 @@ export function AttributesEditor({
   }
 
   /** Группа со своими строками и подгруппами — рисуется на любую глубину. */
-  function renderGroup(node: GroupNode) {
+  function renderGroup(node: PathGroup<Placed>) {
     return (
-      <AttrGroup
+      <GroupBox
         key={node.prefix}
         prefix={node.prefix}
         name={node.name}
-        scope={scope}
+        flagKey={`attrs:${scope}`}
         count={node.count}
         onAdd={() => addRow(`${node.prefix}.`)}
       >
-        {node.rows.map((item) => renderRow(item, node.prefix))}
+        {node.items.map((item) => renderRow(item, node.prefix))}
         {node.groups.map(renderGroup)}
-      </AttrGroup>
+      </GroupBox>
     );
   }
 
@@ -397,24 +325,7 @@ export function AttributesEditor({
           />
         )}
         <span className="spacer" style={{ flex: 1 }} />
-        {!jsonMode && (
-          <div className="row" style={{ gap: 4 }} title="На сколько уровней пути делить группы">
-            <span className="muted" style={{ fontSize: "var(--fs-cap)" }}>
-              группы
-            </span>
-            <div className="subtabs">
-              {DEPTH_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  className={depth === option.value ? "active" : ""}
-                  onClick={() => setDepth(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        <DepthPicker depth={depth} onChange={setDepth} show={!jsonMode} />
         <div className="subtabs">
           <button className={jsonMode ? "" : "active"} onClick={() => switchMode(false)}>
             Поля
@@ -433,12 +344,12 @@ export function AttributesEditor({
       ) : (
         <>
           {rows.length === 0 && <p className="muted">Атрибутов нет.</p>}
-          {rows.length > 0 && tree.rows.length === 0 && tree.groups.length === 0 && (
+          {rows.length > 0 && tree.items.length === 0 && tree.groups.length === 0 && (
             <p className="muted">Ничего не найдено по «{query}».</p>
           )}
           {/* Верхнеуровневые атрибуты без общего корня группой не оборачиваем. */}
-          {tree.rows.length > 0 && (
-            <div className="attr-group-body">{tree.rows.map((item) => renderRow(item, ""))}</div>
+          {tree.items.length > 0 && (
+            <div className="attr-group-body">{tree.items.map((item) => renderRow(item, ""))}</div>
           )}
           {tree.groups.map(renderGroup)}
           <div className="row">
@@ -447,49 +358,6 @@ export function AttributesEditor({
             </button>
           </div>
         </>
-      )}
-    </div>
-  );
-}
-
-/** Группа атрибутов с общим путём; сворачивается и помнит своё состояние. */
-function AttrGroup({
-  prefix,
-  name,
-  scope,
-  count,
-  onAdd,
-  children,
-}: {
-  /** Полный путь группы: он же ключ памяти и подпись кнопки добавления. */
-  prefix: string;
-  /** Последний сегмент — подпись шапки: во вложенной группе путь и так виден. */
-  name: string;
-  scope: string;
-  count: number;
-  onAdd: () => void;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useLocalFlag(`attrs:${scope}:${prefix}`, true);
-
-  return (
-    <div className="attr-group">
-      <button className="attr-group-head" onClick={() => setOpen(!open)} title={prefix}>
-        <span className="sec-caret">{open ? "▾" : "▸"}</span>
-        <span>{name}</span>
-        <span className="muted" style={{ marginLeft: "auto", fontWeight: 400 }}>
-          {count}
-        </span>
-      </button>
-      {open && (
-        <div className="attr-group-body">
-          {children}
-          <div>
-            <button className="ghost small" onClick={onAdd}>
-              + поле в «{prefix}»
-            </button>
-          </div>
-        </div>
       )}
     </div>
   );
