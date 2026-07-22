@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
+import { useConfirm } from "../../components/Feedback";
 import type { CategoryNode, ChannelNode, Entity, ChannelTree } from "../../types";
 
 const TYPE_ICON: Record<string, string> = {
@@ -14,6 +15,7 @@ const TYPE_ICON: Record<string, string> = {
 
 /** Каналы проекта: категории одна за другой, каналы внутри собираются из Discord. */
 export function ChannelsTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
   const tree = useAsync<ChannelTree>(() => api.channelTree(projectId), [projectId]);
   const entities = useAsync<Entity[]>(() => api.listEntities(projectId), [projectId]);
   const [creatingIn, setCreatingIn] = useState<CategoryNode | null>(null);
@@ -21,10 +23,12 @@ export function ChannelsTab({ projectId }: { projectId: number }) {
   const [err, setErr] = useState<string | null>(null);
 
   async function removeChannel(ch: ChannelNode) {
-    const ok = confirm(
-      `Удалить канал #${ch.name} в Discord?\n\n` +
-        "Канал и вся его история пропадут на сервере. Отменить нельзя.",
-    );
+    const ok = await confirm({
+      title: `Удалить канал #${ch.name} в Discord?`,
+      body: "Канал и вся его история пропадут на сервере. Отменить нельзя.",
+      confirmLabel: "Удалить канал",
+      danger: true,
+    });
     if (!ok) return;
     setErr(null);
     try {
@@ -247,7 +251,7 @@ function AccessModal({
   }
 
   return (
-    <Modal title={`Доступ к #${channel.name}`} onClose={onClose}>
+    <Modal title={`Доступ к #${channel.name}`} wide onClose={onClose}>
       <div className="stack">
         <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
           Канал видят игроки всех связанных сущностей. Игрок теряет доступ, только если

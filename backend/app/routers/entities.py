@@ -12,7 +12,10 @@ from sqlalchemy.orm import selectinload
 
 from app.access import sync_channel_access
 from app.access import sync_entity_channels
+from app.computed import merge
+from app.computed import validate as validate_computed
 from app.database import get_db
+from app.descriptions import entity_computed
 from app.descriptions import render_entity_pages
 from app.discord_api import DiscordError
 from app.discord_api import get_guild_member
@@ -23,6 +26,7 @@ from app.models import EntityRelation
 from app.models import EntityType
 from app.models import Project
 from app.routers.projects import get_project_or_404
+from app.schemas import ComputedValueOut
 from app.schemas import EntityChannelCreate
 from app.schemas import EntityChannelOut
 from app.schemas import EntityChannelUpdate
@@ -38,6 +42,7 @@ from app.schemas import RenderedPage
 from app.schemas import TemplatePagesResponse
 from app.security import require_master
 from app.templating import PAGE_SOFT_LIMIT
+from app.templating import format_number
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +63,30 @@ async def get_entity_or_404(project_id: int, entity_id: int, db: AsyncSession) -
     if entity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сущность не найдена")
     return entity
+
+
+async def _check_computed(
+    project_id: int, type_id: int | None, computed: list | None, db: AsyncSession
+) -> None:
+    """Проверить собственные формулы сущности ВМЕСТЕ с формулами её типа.
+
+    По отдельности они корректны, а вместе могут конфликтовать: сущность заводит
+    `бюджет`, когда у типа уже есть `бюджет.деньги`, — путь оказывается сразу и
+    значением, и веткой. Ловить это надо при сохранении, а не при рендере.
+    """
+    if not computed:
+        return
+    type_fields: list = []
+    if type_id is not None:
+        entity_type = await db.get(EntityType, type_id)
+        if entity_type is not None and entity_type.project_id == project_id:
+            type_fields = entity_type.computed or []
+    err = validate_computed(merge(type_fields, computed))
+    if err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Вычисляемые поля: {err}",
+        )
 
 
 async def _resolve_profile(project: Project, player_id: int) -> tuple[str, str]:
@@ -91,6 +120,7 @@ async def create_entity(
 ) -> Entity:
     await get_project_or_404(project_id, db)
     data = body.model_dump()
+    await _check_computed(project_id, data.get("type_id"), data.get("computed"), db)
 
     # Пустые атрибуты + указанный тип → начинаем с заготовки типа. Копируем
     # глубоко, иначе все сущности типа делили бы один и тот же вложенный объект.
@@ -117,7 +147,16 @@ async def update_entity(
     project_id: int, entity_id: int, body: EntityUpdate, db: AsyncSession = Depends(get_db)
 ) -> Entity:
     entity = await get_entity_or_404(project_id, entity_id, db)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    # Смена типа тоже перепроверяет формулы: список типовых стал другим.
+    if "computed" in data or "type_id" in data:
+        await _check_computed(
+            project_id,
+            data.get("type_id", entity.type_id),
+            data.get("computed", entity.computed),
+            db,
+        )
+    for field, value in data.items():
         setattr(entity, field, value)
     await db.commit()
     return await get_entity_or_404(project_id, entity_id, db)
@@ -152,12 +191,23 @@ async def render_entity(
     """Страницы карточки сущности — то же, что листает /me-info в Discord."""
     entity = await get_entity_or_404(project_id, entity_id, db)
     rendered = await render_entity_pages(entity, db)
+    _, values = await entity_computed(entity, db)
     return TemplatePagesResponse(
         pages=[
             RenderedPage(rendered=text, length=len(text), over_limit=len(text) > PAGE_SOFT_LIMIT)
             for text in rendered
         ],
         limit=PAGE_SOFT_LIMIT,
+        computed=[
+            ComputedValueOut(
+                path=item.path,
+                label=item.label,
+                text="" if item.value is None else format_number(item.value),
+                error=item.error,
+                source=item.source,
+            )
+            for item in values
+        ],
     )
 
 

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { PlayerBadge } from "../../components/PlayerBadge";
+import { useConfirm, useToast } from "../../components/Feedback";
 import type { GuildPlayer, Member } from "../../types";
 
 /** Игроки сущности: несколько человек с ролями, один основной. */
@@ -14,6 +15,8 @@ export function MembersSection({
   entityId: number;
   onChanged?: () => void;
 }) {
+  const confirm = useConfirm();
+  const toast = useToast();
   const members = useAsync<Member[]>(
     () => api.listMembers(projectId, entityId),
     [projectId, entityId],
@@ -84,9 +87,20 @@ export function MembersSection({
   }
 
   async function remove(m: Member) {
-    if (!confirm(`Убрать ${m.player_name || m.player_id} из сущности?`)) return;
-    await api.removeMember(projectId, entityId, m.id);
-    refresh();
+    const ok = await confirm({
+      title: `Убрать ${m.player_name || m.player_id} из сущности?`,
+      body: "Игрок потеряет доступ к каналам, которые получил через неё.",
+      confirmLabel: "Убрать",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.removeMember(projectId, entityId, m.id);
+      toast.ok("Игрок убран");
+      refresh();
+    } catch (e) {
+      toast.err(e);
+    }
   }
 
   return (

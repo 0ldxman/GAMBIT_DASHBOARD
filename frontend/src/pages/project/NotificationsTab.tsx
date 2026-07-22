@@ -1,5 +1,6 @@
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
+import { Empty, Skeleton } from "../../components/Empty";
 import type { AppNotification } from "../../types";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -34,16 +35,20 @@ export function NotificationsTab({
 
   return (
     <div>
-      <div className="row spread">
-        <h2 style={{ border: "none" }}>Уведомления</h2>
-        <button className="ghost" onClick={markAll}>
+      <div className="toolbar">
+        <span style={{ flex: 1 }} />
+        <button className="ghost small" onClick={markAll}>
           Прочитать всё
         </button>
       </div>
 
-      {notes.loading && <p className="muted">Загрузка…</p>}
+      {notes.loading && <Skeleton rows={2} height={70} />}
       {notes.error && <p className="error">{notes.error}</p>}
-      {notes.data?.length === 0 && <p className="muted">Уведомлений нет.</p>}
+      {notes.data?.length === 0 && (
+        <Empty icon="🔕" title="Уведомлений нет">
+          Сюда прилетают пинги игроков (<code>/ping-master</code>) и новые заявки.
+        </Empty>
+      )}
 
       <div className="stack">
         {notes.data?.map((n) => (

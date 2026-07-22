@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.computed import compute
+from app.computed import merge
 from app.computed import template_extra
 from app.computed import validate as validate_computed
 from app.database import get_db
@@ -100,7 +101,10 @@ async def preview_pages(
     Формулы считаются здесь же, на тех же атрибутах: мастеру нужно видеть и
     число в поле, и страницу, куда оно подставилось.
     """
-    fields = [field.model_dump() for field in body.computed]
+    fields = merge(
+        [field.model_dump() for field in body.computed],
+        [field.model_dump() for field in body.computed_own],
+    )
     tree, values = compute(fields, body.attributes)
     computed = [
         ComputedValueOut(
@@ -108,6 +112,7 @@ async def preview_pages(
             label=item.label,
             text="" if item.value is None else format_number(item.value),
             error=item.error,
+            source=item.source,
         )
         for item in values
     ]

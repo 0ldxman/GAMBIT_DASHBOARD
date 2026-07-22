@@ -3,8 +3,11 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { JsonEditor } from "../components/JsonEditor";
-import { PagesEditor, PagesPreview } from "../components/PagesEditor";
+import { PagesEditor } from "../components/PagesEditor";
 import { ComputedEditor } from "../components/ComputedEditor";
+import { EntityCard } from "../components/EntityCard";
+import { Hint } from "../components/Hint";
+import { useToast } from "../components/Feedback";
 import type { ComputedField, EntityType, TemplatePages } from "../types";
 
 const SAMPLE_HINT = `{
@@ -35,16 +38,26 @@ function attrPaths(value: unknown, prefix = ""): string[] {
   );
 }
 
+type Tab = "pages" | "computed" | "schema";
+
+const TAB_LABEL: Record<Tab, string> = {
+  pages: "Описание",
+  computed: "Формулы",
+  schema: "Атрибуты",
+};
+
 /** Полноценная страница создания и редактирования типа сущности. */
 export function EntityTypeEditorPage() {
   const { projectId, typeId } = useParams();
   const pid = Number(projectId);
   const isNew = typeId === "new";
   const navigate = useNavigate();
+  const toast = useToast();
 
   const types = useAsync<EntityType[]>(() => api.listTypes(pid), [pid]);
   const existing = isNew ? null : types.data?.find((t) => t.id === Number(typeId)) ?? null;
 
+  const [tab, setTab] = useState<Tab>("pages");
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
   const [pages, setPages] = useState<string[]>([DEFAULT_TEMPLATE]);
@@ -65,7 +78,6 @@ export function EntityTypeEditorPage() {
     }
   }, [sample]);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
   // Заполняем форму, когда тип подгрузился; правки пользователя не затираем.
   useEffect(() => {
@@ -116,16 +128,14 @@ export function EntityTypeEditorPage() {
     let schema: Record<string, unknown>;
     try {
       const parsed = sample.trim() ? JSON.parse(sample) : {};
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("ожидается объект");
-      }
+      if (!isPlainObject(parsed)) throw new Error("ожидается объект");
       schema = parsed;
     } catch (e) {
-      setErr(`Структура атрибутов — некорректный JSON: ${String(e)}`);
+      setTab("schema");
+      toast.err(`Структура атрибутов — некорректный JSON: ${String(e)}`);
       return;
     }
     setBusy(true);
-    setErr(null);
     const payload = {
       label,
       slug,
@@ -139,12 +149,15 @@ export function EntityTypeEditorPage() {
       } else {
         await api.createType(pid, payload);
       }
+      toast.ok(`Тип «${label}» сохранён`);
       navigate(`/projects/${pid}?tab=types`);
     } catch (e) {
-      setErr(String(e));
+      toast.err(e);
       setBusy(false);
     }
   }
+
+  const calcErrors = (preview?.computed ?? []).filter((v) => v.error).length;
 
   if (!isNew && types.loading) return <p className="muted">Загрузка…</p>;
   if (!isNew && !existing && types.data) return <p className="error">Тип не найден</p>;
@@ -157,32 +170,45 @@ export function EntityTypeEditorPage() {
         {isNew ? "новый тип" : existing?.label}
       </div>
 
-      <div className="row spread">
-        <h1>{isNew ? "Новый тип" : label || "Тип сущности"}</h1>
+      <header className="page-header">
+        <div className="page-header-text">
+          <h1>{isNew ? "Новый тип" : label || "Тип сущности"}</h1>
+          <p className="muted">
+            Общий вид карточки и правила расчёта для всех сущностей этого типа.
+          </p>
+        </div>
         <button className="primary" disabled={busy || !label || !slug} onClick={save}>
           {busy ? "Сохранение…" : "Сохранить"}
         </button>
-      </div>
-      {err && <div className="error">{err}</div>}
+      </header>
 
-      <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 460px", minWidth: 320 }}>
-          <div className="row" style={{ gap: 12 }}>
-            <div style={{ flex: 1 }}>
+      <div className="entity-layout">
+        <div className="stack">
+          <div className="fields two">
+            <div className="field">
               <label>Название</label>
               <input value={label} onChange={(e) => setLabel(e.target.value)} />
             </div>
-            <div style={{ flex: 1 }}>
+            <div className="field">
               <label>slug</label>
-              <input
-                value={slug}
-                placeholder="country"
-                onChange={(e) => setSlug(e.target.value)}
-              />
+              <input value={slug} placeholder="country" onChange={(e) => setSlug(e.target.value)} />
             </div>
           </div>
 
-          <div className="section">
+          <div className="subtabs">
+            {(Object.keys(TAB_LABEL) as Tab[]).map((key) => (
+              <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
+                {TAB_LABEL[key]}
+                {key === "computed" && computed.length > 0 && (
+                  <span className="calc-badge" style={{ marginLeft: 6 }}>
+                    {calcErrors > 0 ? `⚠ ${calcErrors}` : computed.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {tab === "pages" && (
             <PagesEditor
               pages={pages}
               onChange={setPages}
@@ -190,54 +216,74 @@ export function EntityTypeEditorPage() {
               rendered={preview?.pages}
               limit={preview?.limit ?? 2000}
               hint={
-                <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-                  Jinja2 с кириллицей: <code>{"{{ население }}"}</code>. Вложенность через
-                  точку: <code>{"{{ ВС.людские_ресурсы }}"}</code>. Отсутствующий атрибут
-                  просто останется пустым. Страницы игрок листает в Discord кнопками —
-                  так статы длиннее лимита эмбеда всё-таки помещаются.
-                </p>
+                <Hint id="type-pages">
+                  Jinja2 с кириллицей: <code>{"{{ население }}"}</code>. Вложенность через точку:{" "}
+                  <code>{"{{ ВС.людские_ресурсы }}"}</code>. Отсутствующий атрибут просто останется
+                  пустым. Страницы игрок листает в Discord кнопками — так статы длиннее лимита
+                  эмбеда всё-таки помещаются.
+                </Hint>
               }
             />
-          </div>
+          )}
 
-          <div className="section">
-            <ComputedEditor
-              fields={computed}
-              onChange={setComputed}
-              values={preview?.computed}
-              paths={attrPaths(parsedSample)}
-              onInsert={(text) => insertRef.current?.(text)}
-            />
-          </div>
+          {tab === "computed" && (
+            <div className="stack tight">
+              <Hint id="type-computed">
+                Формула считается от атрибутов сущности:{" "}
+                <code>казна.прирост - казна.расход</code>, <code>длина(духи)</code>,{" "}
+                <code>сумма(гигаструктуры, "мощь")</code>. Путь с точками собирается в дерево — в
+                шаблоне это <code>{"{{ выч.бюджет.деньги }}"}</code>, а вся ветка сразу —{" "}
+                <code>{"{{ выч.бюджет | поля }}"}</code>. Одна формула может ссылаться на другую, а
+                отдельная сущность — переопределить любую из них у себя.
+              </Hint>
+              <ComputedEditor
+                fields={computed}
+                onChange={setComputed}
+                values={preview?.computed}
+                paths={attrPaths(parsedSample)}
+                onInsert={(text) => {
+                  insertRef.current?.(text);
+                  toast.ok("Вставлено в описание");
+                }}
+              />
+            </div>
+          )}
 
-          <div className="section">
-            <label>Структура атрибутов (JSON)</label>
-            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-              Новая сущность этого типа создаётся сразу с этими полями и значениями —
-              их останется только заполнить. Здесь же берутся данные для предпросмотра
-              справа.
-            </p>
-            <JsonEditor
-              value={sample}
-              minHeight={200}
-              onChange={(v) => {
-                setSample(v);
-                try {
-                  JSON.parse(v || "{}");
-                  setSampleError(null);
-                } catch (e) {
-                  setSampleError(String(e));
-                }
-              }}
-            />
-            {sampleError && <div className="error">{sampleError}</div>}
-          </div>
+          {tab === "schema" && (
+            <div className="stack tight">
+              <Hint id="type-schema">
+                Новая сущность этого типа создаётся сразу с этими полями и значениями — их
+                останется только заполнить. Отсюда же берутся данные для предпросмотра справа и
+                подсказки путей в формулах.
+              </Hint>
+              <JsonEditor
+                value={sample}
+                minHeight={280}
+                onChange={(v) => {
+                  setSample(v);
+                  try {
+                    JSON.parse(v || "{}");
+                    setSampleError(null);
+                  } catch (e) {
+                    setSampleError(String(e));
+                  }
+                }}
+              />
+              {sampleError && <div className="error">{sampleError}</div>}
+            </div>
+          )}
         </div>
 
-        <div style={{ flex: "1 1 320px", minWidth: 280, position: "sticky", top: 16 }}>
-          <label>Предпросмотр (как в Discord /me-info)</label>
-          <PagesPreview pages={preview?.pages} error={preview?.error} />
-        </div>
+        <aside className="entity-aside">
+          <h2 className="section-title">Карточка игрока (/me-info)</h2>
+          <EntityCard
+            label={label || "Пример"}
+            picture=""
+            pages={preview?.pages}
+            error={preview?.error}
+            limit={preview?.limit ?? 2000}
+          />
+        </aside>
       </div>
     </div>
   );

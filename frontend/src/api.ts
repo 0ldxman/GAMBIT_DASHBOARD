@@ -9,8 +9,10 @@ import type {
   DiscordGuild,
   DiscordMember,
   DiscordRole,
+  EditPreview,
   Entity,
   EntityChannel,
+  EntityEdit,
   EntityLink,
   EntityPingCount,
   EntityType,
@@ -169,7 +171,10 @@ export const api = {
       pages: string[];
       attributes: Record<string, unknown>;
       label: string;
+      /** Формулы типа. */
       computed?: ComputedField[];
+      /** Свои формулы сущности — сервер сольёт их с типовыми. */
+      computed_own?: ComputedField[];
     },
   ) =>
     request<TemplatePages>("POST", `/projects/${pid}/entity-types/preview-pages`, data),
@@ -247,6 +252,9 @@ export const api = {
     request<Post>("PATCH", `/projects/${pid}/posts/${postId}`, data),
   deletePost: (pid: number, postId: number) =>
     request<void>("DELETE", `/projects/${pid}/posts/${postId}`),
+  // Что правки сделают с сущностями — до необратимой публикации.
+  previewEdits: (pid: number, edits: EntityEdit[]) =>
+    request<EditPreview[]>("POST", `/projects/${pid}/posts/preview-edits`, { edits }),
   publishPost: (pid: number, postId: number) =>
     request<Post>("POST", `/projects/${pid}/posts/${postId}/publish`),
   schedulePost: (pid: number, postId: number, scheduledAt: string) =>

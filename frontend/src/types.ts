@@ -71,6 +71,9 @@ export interface ComputedField {
   expr: string;
 }
 
+/** Откуда формула: от типа, своя у сущности или своя вместо типовой. */
+export type ComputedSource = "type" | "entity" | "override" | "";
+
 /** Значение формулы на конкретных атрибутах. */
 export interface ComputedValue {
   path: string;
@@ -78,6 +81,7 @@ export interface ComputedValue {
   /** Готовый текст («12 400»); при ошибке пустой. */
   text: string;
   error: string | null;
+  source: ComputedSource;
 }
 
 export interface Member {
@@ -184,6 +188,8 @@ export interface Entity {
   /** Особое описание замещает страницы типа. */
   use_custom_description: boolean;
   description_pages: string[];
+  /** Свои формулы: дополняют формулы типа, совпадение путей — переопределяет. */
+  computed: ComputedField[];
   members: Member[];
 }
 
@@ -202,6 +208,21 @@ export interface EntityEdit {
   entity_id: number;
   ops: EntityEditOp[];
   attributes?: Record<string, unknown>;
+}
+
+/** Одна строка предпросмотра правки: что было и что станет. */
+export interface EditPreviewRow {
+  path: string;
+  before: string;
+  after: string;
+  changed: boolean;
+  error: string | null;
+}
+
+export interface EditPreview {
+  entity_id: number;
+  label: string;
+  rows: EditPreviewRow[];
 }
 
 export interface Attachment {

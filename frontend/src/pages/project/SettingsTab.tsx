@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { CategoryPicker } from "../../components/CategoryPicker";
+import { Section } from "../../components/Section";
+import { Hint } from "../../components/Hint";
+import { useConfirm, useToast } from "../../components/Feedback";
 import type {
   AccessLevel,
   DiscordChannel,
@@ -67,8 +70,7 @@ export function SettingsTab({
 
   return (
     <div className="stack">
-      <section className="card">
-        <h3 style={{ marginTop: 0 }}>Основное</h3>
+      <Section id="settings-main" title="Основное" summary={label}>
         <div>
           <label>Название</label>
           <input value={label} onChange={(e) => setLabel(e.target.value)} />
@@ -94,10 +96,10 @@ export function SettingsTab({
         </div>
 
         <label style={{ marginTop: 16 }}>Категории проекта</label>
-        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        <Hint id="settings-categories">
           Всё внутри выбранных категорий принадлежит проекту. Снятие категории не удаляет
           каналы в Discord — проект просто перестаёт ими владеть.
-        </p>
+        </Hint>
         <CategoryPicker
           channels={channels.data ?? []}
           selected={categoryIds}
@@ -112,7 +114,7 @@ export function SettingsTab({
             {saving ? "Сохранение…" : "Сохранить"}
           </button>
         </div>
-      </section>
+      </Section>
 
       <MediaSection project={project} onSaved={onSaved} />
       <RolesSection projectId={pid} guildId={guildId} />
@@ -170,25 +172,28 @@ function MediaSection({ project, onSaved }: { project: Project; onSaved: () => v
   }
 
   return (
-    <section className="card">
-      <div className="row spread">
-        <h3 style={{ margin: 0 }}>Вложение карточки</h3>
-        <div className="row" style={{ gap: 6 }}>
-          <button className="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>
+    <Section
+      id="settings-media"
+      title="Вложение карточки"
+      defaultOpen={Boolean(url)}
+      summary={url ? "есть" : "нет"}
+      actions={
+        <>
+          <button className="ghost small" disabled={busy} onClick={() => fileRef.current?.click()}>
             {busy ? "Загрузка…" : url ? "Заменить" : "+ файл"}
           </button>
           {url && (
-            <button className="ghost danger" disabled={busy} onClick={clear}>
+            <button className="ghost small danger" disabled={busy} onClick={clear}>
               Убрать
             </button>
           )}
-        </div>
-      </div>
-      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-        Показывается в эмбеде команды <code>/about</code>. Картинка и гифка выводятся
-        внутри эмбеда; видео Discord внутрь эмбеда не пускает — оно придёт плеером
-        под сообщением.
-      </p>
+        </>
+      }
+    >
+      <Hint id="settings-media">
+        Показывается в эмбеде команды <code>/about</code>. Картинка и гифка выводятся внутри
+        эмбеда; видео Discord внутрь эмбеда не пускает — оно придёт плеером под сообщением.
+      </Hint>
 
       <input
         ref={fileRef}
@@ -221,12 +226,14 @@ function MediaSection({ project, onSaved }: { project: Project; onSaved: () => v
         </div>
       )}
       {err && <div className="error">{err}</div>}
-    </section>
+    </Section>
   );
 }
 
 /** Роли сервера, наделённые правами в проекте. Сохраняются сразу, без общей кнопки. */
 function RolesSection({ projectId, guildId }: { projectId: number; guildId: string | null }) {
+  const confirm = useConfirm();
+  const toast = useToast();
   const roles = useAsync<ProjectRole[]>(() => api.listProjectRoles(projectId), [projectId]);
   const guildRoles = useAsync<DiscordRole[]>(
     () => (guildId ? api.listGuildRoles(guildId) : Promise.resolve([])),
@@ -266,19 +273,33 @@ function RolesSection({ projectId, guildId }: { projectId: number; guildId: stri
   }
 
   async function remove(r: ProjectRole) {
-    if (!confirm(`Убрать роль «${r.name}» из проекта?`)) return;
-    await api.deleteProjectRole(projectId, r.id);
-    roles.reload();
+    const ok = await confirm({
+      title: `Убрать роль «${r.name}» из проекта?`,
+      body: "Права, которые она давала внутри проекта, пропадут. Сама роль на сервере останется.",
+      confirmLabel: "Убрать",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteProjectRole(projectId, r.id);
+      toast.ok("Роль убрана");
+      roles.reload();
+    } catch (e) {
+      toast.err(e);
+    }
   }
 
   return (
-    <section className="card">
-      <h3 style={{ marginTop: 0 }}>Роли</h3>
-      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-        Ролям уровня админ и модератор приватные каналы проекта открыты всегда. Игрокам —
-        нет: доступ к каналу они получают через свои сущности, иначе любой игрок видел бы
-        приватные каналы чужих стран.
-      </p>
+    <Section
+      id="settings-roles"
+      title="Роли"
+      summary={`${roles.data?.length ?? 0} в проекте`}
+    >
+      <Hint id="settings-roles">
+        Ролям уровня админ и модератор приватные каналы проекта открыты всегда. Игрокам — нет:
+        доступ к каналу они получают через свои сущности, иначе любой игрок видел бы приватные
+        каналы чужих стран.
+      </Hint>
 
       {roles.loading && <p className="muted">Загрузка…</p>}
       {roles.error && <p className="error">{roles.error}</p>}
@@ -349,6 +370,6 @@ function RolesSection({ projectId, guildId }: { projectId: number; guildId: stri
         </>
       )}
       {err && <div className="error">{err}</div>}
-    </section>
+    </Section>
   );
 }

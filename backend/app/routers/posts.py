@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attributes import apply_attribute_patch
 from app.computed import compute
+from app.computed import merge
 from app.computed import template_extra
 from app.database import get_db
 from app.expressions import ExpressionError
@@ -21,10 +23,14 @@ from app.models import EntityType
 from app.models import PostStatus
 from app.models import Post
 from app.routers.projects import get_project_or_404
+from app.schemas import EditPreviewOut
+from app.schemas import EditPreviewRow
+from app.schemas import EditsPreviewRequest
 from app.schemas import PostCreate
 from app.schemas import PostOut
 from app.schemas import PostUpdate
 from app.security import require_master
+from app.templating import format_number
 
 router = APIRouter(
     prefix="/projects/{project_id}/posts",
@@ -40,13 +46,65 @@ async def get_post_or_404(project_id: int, post_id: int, db: AsyncSession) -> Po
     return post
 
 
+def run_edit_ops(
+    attributes: dict, fields: list, ops: list, attrs: dict
+) -> tuple[dict, dict[str, str]]:
+    """Прогнать операции над копией атрибутов.
+
+    Возвращает (итоговые атрибуты, ошибки по путям). Ошибка одной операции не
+    прерывает остальные: предпросмотру нужно показать всю картину сразу, а
+    публикация всё равно откажется применять правку с ошибкой.
+
+    Выражения считаются по АКТУАЛЬНЫМ атрибутам и последовательно, поэтому
+    операция видит результат предыдущих.
+    """
+    current = dict(attributes or {})
+    errors: dict[str, str] = {}
+    for op in ops or []:
+        if not isinstance(op, dict):
+            continue
+        path = (op.get("path") or "").strip()
+        if not path:
+            continue
+        mode = op.get("mode") or "set"
+        if mode == "delete":
+            current = apply_attribute_patch(current, {path: None})
+        elif mode == "expr":
+            # Формулы доступны как «выч.бюджет.итого» — типовые вместе с
+            # собственными формулами сущности.
+            tree, _ = compute(fields, current)
+            context = {**current, **template_extra(tree, current)}
+            try:
+                value = evaluate(str(op.get("value") or ""), context)
+            except ExpressionError as exc:
+                errors[path] = str(exc)
+                continue
+            current = apply_attribute_patch(current, {path: value})
+        else:
+            current = apply_attribute_patch(current, {path: op.get("value")})
+
+    if attrs:
+        current = apply_attribute_patch(current, attrs)
+    return current, errors
+
+
+async def _edit_target(project_id: int, entity_id: int, db: AsyncSession) -> tuple[Entity, list]:
+    """Сущность правки и действующий для неё список формул."""
+    entity = await db.get(Entity, entity_id)
+    if entity is None or entity.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Сущность {entity_id} не принадлежит проекту",
+        )
+    entity_type = await db.get(EntityType, entity.type_id) if entity.type_id is not None else None
+    return entity, merge(entity_type.computed if entity_type else [], entity.computed)
+
+
 async def apply_entity_edits(project_id: int, edits: list, db: AsyncSession) -> None:
     """Применить правки сущностей.
 
     Поддерживаются два формата:
-      * ops — список операций set/expr/delete над dot-path (выражения считаются
-        по АКТУАЛЬНЫМ атрибутам, последовательно, поэтому операции видят
-        результат предыдущих);
+      * ops — список операций set/expr/delete над dot-path;
       * attributes — прежний формат-патч (deep merge).
     """
     for edit in edits or []:
@@ -60,45 +118,76 @@ async def apply_entity_edits(project_id: int, edits: list, db: AsyncSession) -> 
         if not ops and not attrs:
             continue
 
-        entity = await db.get(Entity, entity_id)
-        if entity is None or entity.project_id != project_id:
+        entity, fields = await _edit_target(project_id, entity_id, db)
+        current, errors = run_edit_ops(entity.attributes, fields, ops, attrs)
+        if errors:
+            path, message = next(iter(errors.items()))
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Сущность {entity_id} не принадлежит проекту",
+                detail=f"«{entity.label}» → {path}: {message}",
             )
+        entity.attributes = current
 
-        entity_type = (
-            await db.get(EntityType, entity.type_id) if entity.type_id is not None else None
-        )
-        current = dict(entity.attributes or {})
+
+def _show(value: object) -> str:
+    """Значение атрибута строкой для дашборда."""
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    if isinstance(value, (int, float)):
+        return format_number(value)
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _at_path(attributes: dict, path: str) -> object:
+    node: object = attributes
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+@router.post("/preview-edits", response_model=list[EditPreviewOut])
+async def preview_edits(
+    project_id: int, body: EditsPreviewRequest, db: AsyncSession = Depends(get_db)
+) -> list[EditPreviewOut]:
+    """Что правки сделают с сущностями, если верд опубликовать прямо сейчас.
+
+    Публикация необратима и меняет чужие данные, поэтому мастер должен видеть
+    «было → станет» до неё, а не узнавать результат по факту. Сами атрибуты
+    здесь не меняются: операции прогоняются по копии.
+    """
+    await get_project_or_404(project_id, db)
+    result: list[EditPreviewOut] = []
+    for edit in body.edits:
+        ops = [op.model_dump() for op in edit.ops]
+        if not ops and not edit.attributes:
+            continue
+        entity, fields = await _edit_target(project_id, edit.entity_id, db)
+        before = dict(entity.attributes or {})
+        after, errors = run_edit_ops(before, fields, ops, edit.attributes)
+
+        rows: list[EditPreviewRow] = []
         for op in ops:
-            if not isinstance(op, dict):
-                continue
             path = (op.get("path") or "").strip()
             if not path:
                 continue
-            mode = op.get("mode") or "set"
-            if mode == "delete":
-                current = apply_attribute_patch(current, {path: None})
-            elif mode == "expr":
-                # Формулы типа доступны как «выч.бюджет.итого». Пересчитываем на
-                # каждой операции: предыдущие уже поменяли атрибуты.
-                tree, _ = compute(entity_type.computed if entity_type else [], current)
-                context = {**current, **template_extra(tree, current)}
-                try:
-                    value = evaluate(str(op.get("value") or ""), context)
-                except ExpressionError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"«{entity.label}» → {path}: {exc}",
-                    )
-                current = apply_attribute_patch(current, {path: value})
-            else:
-                current = apply_attribute_patch(current, {path: op.get("value")})
-
-        if attrs:
-            current = apply_attribute_patch(current, attrs)
-        entity.attributes = current
+            was, now = _at_path(before, path), _at_path(after, path)
+            rows.append(
+                EditPreviewRow(
+                    path=path,
+                    before=_show(was),
+                    after=_show(now),
+                    changed=was != now,
+                    error=errors.get(path),
+                )
+            )
+        result.append(EditPreviewOut(entity_id=entity.id, label=entity.label, rows=rows))
+    return result
 
 
 @router.get("", response_model=list[PostOut])

@@ -13,6 +13,9 @@
 Поля могут ссылаться друг на друга (`выч.бюджет.деньги + выч.бюджет.налоги`) —
 порядок вычисления определяется по зависимостям, циклы отлавливаются.
 
+Формулы бывают у типа и у самой сущности; перед расчётом они сливаются
+функцией `merge()` — см. её описание.
+
 Ошибка в одном поле не ломает остальные и не роняет карточку: поле просто
 не попадает в дерево, а мастер видит текст ошибки в редакторе типа.
 """
@@ -57,6 +60,9 @@ class ComputedValue:
     label: str
     value: float | int | None = None
     error: str | None = None
+    # Откуда взялась формула: "type" — от типа, "entity" — своя у сущности,
+    # "override" — своя вместо типовой. Нужно только для подписи в дашборде.
+    source: str = ""
 
 
 def template_extra(tree: dict[str, Any], attributes: dict[str, Any] | None) -> dict[str, Any]:
@@ -88,8 +94,42 @@ def normalize(raw: Any) -> list[dict[str, str]]:
         if not path or not expr or path in seen:
             continue
         seen.add(path)
-        fields.append({"path": path, "label": str(item.get("label") or "").strip(), "expr": expr})
+        fields.append(
+            {
+                "path": path,
+                "label": str(item.get("label") or "").strip(),
+                "expr": expr,
+                # Проставляется merge(); из JSONB приходит пустым.
+                "source": str(item.get("source") or ""),
+            }
+        )
     return fields
+
+
+def merge(type_raw: Any, entity_raw: Any) -> list[dict[str, str]]:
+    """Формулы типа плюс собственные формулы сущности.
+
+    Собственные не замещают типовые целиком, а дополняют их: у страны-исключения
+    обычно особый один расчёт, а не все десять. Совпадение путей переопределяет
+    формулу, оставляя её НА МЕСТЕ типовой в порядке вывода — иначе `| поля`
+    печатал бы у сущностей одного типа разный порядок строк.
+
+    Ссылки между формулами при этом работают через слитый список: типовое
+    `выч.бюджет.итого` подхватит переопределённое `выч.бюджет.деньги` само.
+    """
+    base = normalize(type_raw)
+    own = {field["path"]: field for field in normalize(entity_raw)}
+
+    merged: list[dict[str, str]] = []
+    for field in base:
+        override = own.pop(field["path"], None)
+        if override is None:
+            merged.append({**field, "source": "type"})
+        else:
+            merged.append({**override, "source": "override"})
+    for field in own.values():
+        merged.append({**field, "source": "entity"})
+    return merged
 
 
 def validate(raw: Any) -> str | None:
@@ -233,6 +273,7 @@ def compute(
                 label=label,
                 value=values.get(path),
                 error=errors.get(path),
+                source=field.get("source", ""),
             )
         )
         # Подпись листа видна всем его веткам — так `| поля` печатает ветку

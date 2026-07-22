@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { useAsync } from "../hooks";
+import { useAsync, useChanges, useDebounced } from "../hooks";
 import { DiscordPreview } from "../components/DiscordPreview";
 import { Modal } from "../components/Modal";
+import { Section } from "../components/Section";
+import { Hint } from "../components/Hint";
+import { SaveBar } from "../components/SaveBar";
+import { useConfirm, useToast } from "../components/Feedback";
 import type {
   Attachment,
   Channel,
   DiscordChannel,
   EditMode,
+  EditPreview,
   Entity,
   EntityEdit,
   EntityEditOp,
@@ -46,12 +51,53 @@ const MODE_LABEL: Record<EditMode, string> = {
   delete: "✕  удалить",
 };
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Пути атрибутов сущности для автодополнения: до листа, списки — целиком. */
+function attrPaths(value: unknown, prefix = ""): string[] {
+  if (!isPlainObject(value)) return prefix ? [prefix] : [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    attrPaths(item, prefix ? `${prefix}.${key}` : key),
+  );
+}
+
+/**
+ * Значение режима «записать» приходит из поля строкой. Числа, булевы и списки
+ * разбираем как JSON, чтобы они легли в атрибуты нужным типом — одинаково и
+ * при сохранении, и в предпросмотре.
+ */
+function normalizeEdits(edits: EntityEdit[]): EntityEdit[] {
+  return edits.map((e) => ({
+    ...e,
+    ops: e.ops.map((op) => {
+      if (op.mode !== "set") return op;
+      const raw = String(op.value ?? "");
+      try {
+        return { ...op, value: JSON.parse(raw) };
+      } catch {
+        return { ...op, value: raw };
+      }
+    }),
+  }));
+}
+
+type Tab = "message" | "edits" | "publish";
+
+const TAB_LABEL: Record<Tab, string> = {
+  message: "Сообщение",
+  edits: "Правки",
+  publish: "Публикация",
+};
+
 /** Отдельная страница создания/редактирования верда. */
 export function PostEditorPage() {
   const { projectId, postId } = useParams();
   const pid = Number(projectId);
   const isNew = postId === "new";
   const navigate = useNavigate();
+  const confirm = useConfirm();
+  const toast = useToast();
   // ?entity=<id> — верд открыт кнопкой «Написать верд» с экрана сущности.
   const [searchParams] = useSearchParams();
   const presetEntityId = Number(searchParams.get("entity")) || null;
@@ -69,6 +115,7 @@ export function PostEditorPage() {
   const templates = useAsync<PostTemplate[]>(() => api.listPostTemplates(pid), [pid]);
 
   // --- поля верда ---
+  const [tab, setTab] = useState<Tab>("message");
   const [title, setTitle] = useState("");
   const [targetChannelId, setTargetChannelId] = useState("");
   const [authorName, setAuthorName] = useState("");
@@ -87,7 +134,6 @@ export function PostEditorPage() {
   const [scheduledAt, setScheduledAt] = useState("");
 
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [appliedTemplate, setAppliedTemplate] = useState<number | null>(null);
@@ -124,26 +170,26 @@ export function PostEditorPage() {
     };
     for (const key of tpl.fields) setters[key]?.(tpl.data[key]);
     setAppliedTemplate(tpl.id);
-    setMsg(`Применён шаблон «${tpl.name}»`);
+    toast.ok(`Применён шаблон «${tpl.name}»`);
   }
 
   async function removeTemplate() {
     const tpl = templates.data?.find((t) => t.id === appliedTemplate);
-    if (!tpl || !confirm(`Удалить шаблон «${tpl.name}»? Верды это не затронет.`)) return;
+    if (!tpl) return;
+    const ok = await confirm({
+      title: `Удалить шаблон «${tpl.name}»?`,
+      body: "Уже написанные верды это не затронет.",
+      confirmLabel: "Удалить",
+      danger: true,
+    });
+    if (!ok) return;
     await api.deletePostTemplate(pid, tpl.id);
     setAppliedTemplate(null);
     templates.reload();
+    toast.ok("Шаблон удалён");
   }
 
-  useEffect(() => {
-    if (isNew) {
-      // Сущность уже выбрана — сразу заводим для неё пустой блок правок.
-      if (presetEntityId) setEdits([{ entity_id: presetEntityId, ops: [] }]);
-      setLoaded(true);
-      return;
-    }
-    const p = existing.data;
-    if (!p || loaded) return;
+  function fillFrom(p: Post) {
     setTitle(p.title);
     setTargetChannelId(p.target_channel_id ?? "");
     setAuthorName(p.author_name);
@@ -172,32 +218,73 @@ export function PostEditorPage() {
               })),
       })),
     );
+  }
+
+  useEffect(() => {
+    if (isNew) {
+      // Сущность уже выбрана — сразу заводим для неё пустой блок правок.
+      if (presetEntityId) {
+        setEdits([{ entity_id: presetEntityId, ops: [] }]);
+        setTab("edits");
+      }
+      setLoaded(true);
+      return;
+    }
+    const p = existing.data;
+    if (!p || loaded) return;
+    fillFrom(p);
     setLoaded(true);
-  }, [existing.data, isNew, loaded]);
+  }, [existing.data, isNew, loaded, presetEntityId]);
 
   const published = existing.data?.status === "published";
 
+  const changed = useChanges(
+    {
+      title,
+      target_channel_id: targetChannelId,
+      content,
+      author_name: authorName,
+      author_avatar_url: authorAvatar,
+      use_embed: useEmbed,
+      embed_title: embedTitle,
+      embed_description: embedDescription,
+      embed_author_name: embedAuthorName,
+      embed_author_icon_url: embedAuthorIcon,
+      embed_image_url: embedImage,
+      embed_color: embedColor,
+      attachments,
+      entity_edits: normalizeEdits(edits),
+    },
+    existing.data
+      ? { ...existing.data, target_channel_id: existing.data.target_channel_id ?? "" }
+      : null,
+    {
+      title: "название",
+      target_channel_id: "канал",
+      content: "текст",
+      author_name: "отправитель",
+      author_avatar_url: "отправитель",
+      use_embed: "эмбед",
+      embed_title: "эмбед",
+      embed_description: "эмбед",
+      embed_author_name: "эмбед",
+      embed_author_icon_url: "эмбед",
+      embed_image_url: "эмбед",
+      embed_color: "эмбед",
+      attachments: "вложения",
+      entity_edits: "правки",
+    },
+  );
+  // У нового верда сравнивать не с чем: он «грязный», пока не сохранён.
+  const dirty = !published && (isNew ? true : changed.length > 0);
+
   async function save(): Promise<number | null> {
     if (targetChannelId && !/^\d+$/.test(targetChannelId)) {
-      setMsg("Discord channel_id должен состоять только из цифр");
+      setTab("publish");
+      toast.err("Discord channel_id должен состоять только из цифр");
       return null;
     }
     setSaving(true);
-    setMsg(null);
-    // В режиме "записать" значение из поля — строка; числа/булевы/списки
-    // разбираем как JSON, чтобы они легли в атрибуты нужным типом.
-    const normalized: EntityEdit[] = edits.map((e) => ({
-      ...e,
-      ops: e.ops.map((op) => {
-        if (op.mode !== "set") return op;
-        const raw = String(op.value ?? "");
-        try {
-          return { ...op, value: JSON.parse(raw) };
-        } catch {
-          return { ...op, value: raw };
-        }
-      }),
-    }));
     const payload = {
       title,
       target_channel_id: targetChannelId || null,
@@ -213,20 +300,21 @@ export function PostEditorPage() {
       embed_color: embedColor,
       scheduled_at: fromLocalInput(scheduledAt),
       attachments,
-      entity_edits: normalized,
+      entity_edits: normalizeEdits(edits),
     };
     try {
       if (isNew) {
         const created = await api.createPost(pid, payload);
         navigate(`/projects/${pid}/posts/${created.id}`, { replace: true });
-        setMsg("Черновик создан");
+        toast.ok("Черновик создан");
         return created.id;
       }
       await api.updatePost(pid, Number(postId), payload);
-      setMsg("Сохранено");
+      toast.ok("Сохранено");
+      existing.reload();
       return Number(postId);
     } catch (e) {
-      setMsg(String(e));
+      toast.err(e);
       return null;
     } finally {
       setSaving(false);
@@ -234,36 +322,59 @@ export function PostEditorPage() {
   }
 
   async function publish() {
+    const opsCount = edits.reduce((n, e) => n + e.ops.length, 0);
+    const ok = await confirm({
+      title: "Опубликовать верд?",
+      body: (
+        <div className="stack tight">
+          <div>Сообщение уйдёт в Discord — отозвать его из дашборда нельзя.</div>
+          {opsCount > 0 && (
+            <div className="error">
+              {opsCount} {opsCount === 1 ? "правка изменит" : "правок изменят"} атрибуты сущностей.
+              Проверьте вкладку «Правки».
+            </div>
+          )}
+        </div>
+      ),
+      confirmLabel: "Опубликовать",
+      danger: true,
+    });
+    if (!ok) return;
     const id = await save();
     if (id == null) return;
-    if (!confirm("Опубликовать верд? Правки применятся к сущностям, сообщение уйдёт в Discord.")) return;
     try {
       await api.publishPost(pid, id);
+      toast.ok("Верд опубликован");
       navigate(`/projects/${pid}`);
     } catch (e) {
-      setMsg(String(e));
+      toast.err(e);
     }
   }
 
   async function schedule() {
     const iso = fromLocalInput(scheduledAt);
     if (!iso) {
-      setMsg("Укажите дату и время публикации");
+      setTab("publish");
+      toast.err("Укажите дату и время публикации");
       return;
     }
     if (new Date(iso).getTime() < Date.now()) {
-      setMsg("Время публикации уже прошло");
+      setTab("publish");
+      toast.err("Время публикации уже прошло");
       return;
     }
     const id = await save();
     if (id == null) return;
     try {
       await api.schedulePost(pid, id, iso);
+      toast.ok(`Верд уйдёт ${DATE_FMT.format(new Date(iso))}`);
       navigate(`/projects/${pid}`);
     } catch (e) {
-      setMsg(String(e));
+      toast.err(e);
     }
   }
+
+  const editCount = edits.reduce((n, e) => n + e.ops.length, 0);
 
   if (!isNew && existing.loading) return <p className="muted">Загрузка…</p>;
   if (existing.error) return <p className="error">{existing.error}</p>;
@@ -271,7 +382,7 @@ export function PostEditorPage() {
   return (
     <div>
       <div className="crumbs">
-        <Link to="/">Проекты</Link> / <Link to={`/projects/${pid}`}>Проект</Link> /{" "}
+        <Link to="/">Серверы</Link> / <Link to={`/projects/${pid}`}>Проект</Link> /{" "}
         {isNew ? "новый верд" : title || "верд"}
       </div>
 
@@ -288,12 +399,9 @@ export function PostEditorPage() {
             )}
           </p>
         </div>
-        <div className="row" style={{ gap: 8 }}>
+        <div className="row">
           <button className="ghost" onClick={() => navigate(`/projects/${pid}`)}>
             Назад
-          </button>
-          <button className="ghost" disabled={saving || published} onClick={save}>
-            {saving ? "Сохранение…" : "Сохранить черновик"}
           </button>
           {scheduledAt ? (
             <button className="primary" disabled={saving || published} onClick={schedule}>
@@ -309,218 +417,212 @@ export function PostEditorPage() {
       {published && (
         <p className="error">Верд уже опубликован — редактирование недоступно.</p>
       )}
-      {msg && (
-        <div className={/Сохранено|создан|Применён|Шаблон/.test(msg) ? "muted" : "error"}>{msg}</div>
-      )}
 
-      <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
-        {/* ---------- левая колонка: редактор ---------- */}
-        <div className="stack" style={{ flex: "1 1 520px", minWidth: 340 }}>
-          <section className="card">
-            <div className="row spread">
-              <h3 style={{ margin: 0 }}>Шаблон</h3>
-              <button className="ghost" disabled={published} onClick={() => setSavingTemplate(true)}>
-                Сохранить как шаблон
-              </button>
-            </div>
-            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-              Шаблон подставляет только те поля, которые в нём отмечены — остальное
-              в верде остаётся как есть.
-            </p>
-            <div className="row" style={{ gap: 8 }}>
-              <select
-                value={appliedTemplate ?? ""}
-                style={{ flex: 1 }}
-                disabled={published || (templates.data ?? []).length === 0}
-                onChange={(e) => {
-                  const tpl = templates.data?.find((t) => t.id === Number(e.target.value));
-                  if (tpl) applyTemplate(tpl);
-                  else setAppliedTemplate(null);
-                }}
-              >
-                <option value="">
-                  {(templates.data ?? []).length === 0
-                    ? "— шаблонов пока нет —"
-                    : "— применить шаблон —"}
-                </option>
-                {templates.data?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-              {appliedTemplate !== null && (
-                <button className="ghost danger" onClick={removeTemplate}>
-                  Удалить шаблон
-                </button>
+      <div className="row spread" style={{ marginBottom: "var(--s4)" }}>
+        <div className="subtabs">
+          {(Object.keys(TAB_LABEL) as Tab[]).map((key) => (
+            <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
+              {TAB_LABEL[key]}
+              {key === "edits" && editCount > 0 && (
+                <span className="calc-badge" style={{ marginLeft: 6 }}>
+                  {editCount}
+                </span>
               )}
-            </div>
-          </section>
+            </button>
+          ))}
+        </div>
+        <TemplatePicker
+          templates={templates.data ?? []}
+          applied={appliedTemplate}
+          disabled={published}
+          onApply={applyTemplate}
+          onForget={() => setAppliedTemplate(null)}
+          onDelete={removeTemplate}
+          onSave={() => setSavingTemplate(true)}
+        />
+      </div>
 
-          <section className="card">
-            <h3 style={{ marginTop: 0 }}>Основное</h3>
-            <div>
-              <label>Название верда (только для дашборда)</label>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} />
-            </div>
-            <div>
-              <label>Канал публикации</label>
-              <ChannelPicker
-                value={targetChannelId}
-                registered={channels.data ?? []}
-                guild={guildChannels.data ?? []}
-                onChange={setTargetChannelId}
-              />
-            </div>
-            <div>
-              <label>Время публикации</label>
-              <div className="row" style={{ gap: 8 }}>
-                <input
-                  type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(e) => setScheduledAt(e.target.value)}
+      <div className="entity-layout">
+        <div className="stack">
+          {tab === "message" && (
+            <>
+              <div className="field">
+                <label>Текст сообщения</label>
+                <textarea
+                  value={content}
+                  style={{ minHeight: 160 }}
+                  placeholder="Что увидят в канале…"
+                  onChange={(e) => setContent(e.target.value)}
                 />
-                {scheduledAt && (
-                  <button className="ghost" onClick={() => setScheduledAt("")}>
-                    Очистить
-                  </button>
+              </div>
+
+              <Section
+                id="post-author"
+                title="Отправитель"
+                defaultOpen={false}
+                summary={authorName || "имя бота по умолчанию"}
+              >
+                <Hint id="post-author">
+                  От чьего имени приходит само сообщение в Discord — имя и аватарка вебхука. С
+                  автором эмбеда это не связано.
+                </Hint>
+                <div className="fields two">
+                  <div className="field">
+                    <label>Имя</label>
+                    <input
+                      value={authorName}
+                      placeholder="напр. Совет Безопасности"
+                      onChange={(e) => setAuthorName(e.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Аватарка (URL)</label>
+                    <input
+                      value={authorAvatar}
+                      onChange={(e) => setAuthorAvatar(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </Section>
+
+              <Section
+                id="post-embed"
+                title="Эмбед"
+                defaultOpen={useEmbed}
+                summary={useEmbed ? embedTitle || "без заголовка" : "выключен"}
+                actions={
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={useEmbed}
+                      onChange={(e) => setUseEmbed(e.target.checked)}
+                    />
+                    включить
+                  </label>
+                }
+              >
+                {!useEmbed && (
+                  <p className="hint">
+                    Эмбед — врезка под сообщением: заголовок, описание, картинка и цветная полоса.
+                  </p>
                 )}
-              </div>
-              <p className="muted" style={{ fontSize: 13 }}>
-                {scheduledAt
-                  ? "Верд уйдёт в канал в указанное время — время местное."
-                  : "Пусто — публикуется сразу по кнопке."}
-              </p>
-            </div>
-          </section>
-
-          {/* --- отправитель: идентичность вебхука --- */}
-          <section className="card">
-            <h3 style={{ marginTop: 0 }}>Отправитель</h3>
-            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-              От чьего имени приходит само сообщение в Discord — имя и аватарка вебхука.
-            </p>
-            <div className="row" style={{ gap: 12 }}>
-              <div style={{ flex: 1 }}>
-                <label>Имя</label>
-                <input
-                  value={authorName}
-                  placeholder="напр. Совет Безопасности"
-                  onChange={(e) => setAuthorName(e.target.value)}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label>Аватарка (URL)</label>
-                <input
-                  value={authorAvatar}
-                  onChange={(e) => setAuthorAvatar(e.target.value)}
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* --- текст сообщения --- */}
-          <section className="card">
-            <h3 style={{ marginTop: 0 }}>Текст сообщения</h3>
-            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-              Обычный текст над эмбедом. Может быть и без эмбеда, и вместе с ним.
-            </p>
-            <textarea
-              value={content}
-              style={{ minHeight: 120 }}
-              placeholder="Что увидят в канале…"
-              onChange={(e) => setContent(e.target.value)}
-            />
-          </section>
-
-          {/* --- эмбед --- */}
-          <section className="card">
-            <div className="row spread">
-              <h3 style={{ margin: 0 }}>Эмбед</h3>
-              <label className="row" style={{ margin: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={useEmbed}
-                  style={{ width: "auto", marginRight: 8 }}
-                  onChange={(e) => setUseEmbed(e.target.checked)}
-                />
-                включить
-              </label>
-            </div>
-            {useEmbed && (
-              <div className="stack" style={{ marginTop: 12 }}>
-                <p className="muted" style={{ fontSize: 13, margin: 0 }}>
-                  Автор эмбеда не связан с отправителем: пусто — строки автора не будет,
-                  без иконки — имя выведется без картинки.
-                </p>
-                <div className="row" style={{ gap: 12 }}>
-                  <div style={{ flex: 1 }}>
-                    <label>Автор эмбеда</label>
-                    <input
-                      value={embedAuthorName}
-                      placeholder="не выводится, если пусто"
-                      onChange={(e) => setEmbedAuthorName(e.target.value)}
-                    />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <label>Иконка автора (URL)</label>
-                    <input
-                      value={embedAuthorIcon}
-                      placeholder="необязательно"
-                      onChange={(e) => setEmbedAuthorIcon(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label>Заголовок эмбеда</label>
-                  <input value={embedTitle} onChange={(e) => setEmbedTitle(e.target.value)} />
-                </div>
-                <div>
-                  <label>Описание эмбеда</label>
-                  <textarea
-                    value={embedDescription}
-                    style={{ minHeight: 120 }}
-                    onChange={(e) => setEmbedDescription(e.target.value)}
-                  />
-                </div>
-                <div className="row" style={{ gap: 12 }}>
-                  <div style={{ flex: 2 }}>
-                    <label>Картинка эмбеда (URL)</label>
-                    <input value={embedImage} onChange={(e) => setEmbedImage(e.target.value)} />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <label>Цвет</label>
-                    <div className="row" style={{ gap: 6 }}>
-                      <input
-                        type="color"
-                        value={/^#[0-9a-fA-F]{6}$/.test(embedColor) ? embedColor : "#5865F2"}
-                        style={{ width: 44, padding: 2 }}
-                        onChange={(e) => setEmbedColor(e.target.value)}
+                {useEmbed && (
+                  <div className="stack tight">
+                    <div className="fields two">
+                      <div className="field">
+                        <label>Автор эмбеда</label>
+                        <input
+                          value={embedAuthorName}
+                          placeholder="не выводится, если пусто"
+                          onChange={(e) => setEmbedAuthorName(e.target.value)}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Иконка автора (URL)</label>
+                        <input
+                          value={embedAuthorIcon}
+                          placeholder="необязательно"
+                          onChange={(e) => setEmbedAuthorIcon(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>Заголовок эмбеда</label>
+                      <input value={embedTitle} onChange={(e) => setEmbedTitle(e.target.value)} />
+                    </div>
+                    <div className="field">
+                      <label>Описание эмбеда</label>
+                      <textarea
+                        value={embedDescription}
+                        style={{ minHeight: 120 }}
+                        onChange={(e) => setEmbedDescription(e.target.value)}
                       />
-                      <input value={embedColor} onChange={(e) => setEmbedColor(e.target.value)} />
+                    </div>
+                    <div className="row top">
+                      <div className="field grow">
+                        <label>Картинка эмбеда (URL)</label>
+                        <input value={embedImage} onChange={(e) => setEmbedImage(e.target.value)} />
+                      </div>
+                      <div className="field">
+                        <label>Цвет</label>
+                        <div className="row">
+                          <input
+                            type="color"
+                            value={/^#[0-9a-fA-F]{6}$/.test(embedColor) ? embedColor : "#5865F2"}
+                            style={{ width: 44, padding: 2 }}
+                            onChange={(e) => setEmbedColor(e.target.value)}
+                          />
+                          <input
+                            className="mono"
+                            style={{ width: 96 }}
+                            value={embedColor}
+                            onChange={(e) => setEmbedColor(e.target.value)}
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+              </Section>
+
+              <AttachmentsSection
+                projectId={pid}
+                attachments={attachments}
+                onChange={setAttachments}
+              />
+            </>
+          )}
+
+          {tab === "edits" && (
+            <EditsSection
+              projectId={pid}
+              entities={entities.data ?? []}
+              edits={edits}
+              onChange={setEdits}
+            />
+          )}
+
+          {tab === "publish" && (
+            <>
+              <div className="field">
+                <label>Название верда (только для дашборда)</label>
+                <input value={title} onChange={(e) => setTitle(e.target.value)} />
               </div>
-            )}
-          </section>
-
-          <AttachmentsSection
-            projectId={pid}
-            attachments={attachments}
-            onChange={setAttachments}
-          />
-
-          <EditsSection
-            entities={entities.data ?? []}
-            edits={edits}
-            onChange={setEdits}
-          />
+              <div className="field">
+                <label>Канал публикации</label>
+                <ChannelPicker
+                  value={targetChannelId}
+                  registered={channels.data ?? []}
+                  guild={guildChannels.data ?? []}
+                  onChange={setTargetChannelId}
+                />
+              </div>
+              <div className="field">
+                <label>Время публикации</label>
+                <div className="row">
+                  <input
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                  />
+                  {scheduledAt && (
+                    <button className="ghost small" onClick={() => setScheduledAt("")}>
+                      Очистить
+                    </button>
+                  )}
+                </div>
+                <p className="hint" style={{ marginTop: "var(--s1)" }}>
+                  {scheduledAt
+                    ? "Верд уйдёт в канал в указанное время — время местное."
+                    : "Пусто — публикуется сразу по кнопке «Опубликовать»."}
+                </p>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* ---------- правая колонка: предпросмотр ---------- */}
-        <div style={{ flex: "1 1 380px", minWidth: 320, position: "sticky", top: 16 }}>
-          <label>Предпросмотр</label>
+        <aside className="entity-aside">
+          <h2 className="section-title">Предпросмотр</h2>
           <DiscordPreview
             authorName={authorName}
             authorAvatar={authorAvatar}
@@ -534,8 +636,16 @@ export function PostEditorPage() {
             embedColor={embedColor}
             attachments={attachments}
           />
-        </div>
+        </aside>
       </div>
+
+      <SaveBar
+        dirty={dirty}
+        changed={isNew ? ["черновик ещё не сохранён"] : changed}
+        saving={saving}
+        onSave={save}
+        onReset={() => existing.data && fillFrom(existing.data)}
+      />
 
       {savingTemplate && (
         <SaveTemplateModal
@@ -544,11 +654,62 @@ export function PostEditorPage() {
           onClose={() => setSavingTemplate(false)}
           onSaved={(name) => {
             setSavingTemplate(false);
-            setMsg(`Шаблон «${name}» сохранён`);
+            toast.ok(`Шаблон «${name}» сохранён`);
             templates.reload();
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Шаблон верда: выпадашка в шапке, а не карточка на весь экран. */
+function TemplatePicker({
+  templates,
+  applied,
+  disabled,
+  onApply,
+  onForget,
+  onDelete,
+  onSave,
+}: {
+  templates: PostTemplate[];
+  applied: number | null;
+  disabled: boolean;
+  onApply: (tpl: PostTemplate) => void;
+  onForget: () => void;
+  onDelete: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="row">
+      <select
+        value={applied ?? ""}
+        style={{ width: "auto" }}
+        disabled={disabled || templates.length === 0}
+        onChange={(e) => {
+          const tpl = templates.find((t) => t.id === Number(e.target.value));
+          if (tpl) onApply(tpl);
+          else onForget();
+        }}
+      >
+        <option value="">
+          {templates.length === 0 ? "— шаблонов нет —" : "— применить шаблон —"}
+        </option>
+        {templates.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+      {applied !== null && (
+        <button className="icon danger" title="Удалить шаблон" onClick={onDelete}>
+          ✕
+        </button>
+      )}
+      <button className="ghost small" disabled={disabled} onClick={onSave}>
+        Сохранить как шаблон
+      </button>
     </div>
   );
 }
@@ -569,7 +730,7 @@ function SaveTemplateModal({
   const [name, setName] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const toast = useToast();
 
   function toggle(key: string) {
     setPicked(picked.includes(key) ? picked.filter((k) => k !== key) : [...picked, key]);
@@ -577,7 +738,6 @@ function SaveTemplateModal({
 
   async function save() {
     setBusy(true);
-    setErr(null);
     try {
       await api.createPostTemplate(projectId, {
         name: name.trim(),
@@ -588,7 +748,7 @@ function SaveTemplateModal({
       });
       onSaved(name.trim());
     } catch (e) {
-      setErr(String(e));
+      toast.err(e);
       setBusy(false);
     }
   }
@@ -596,7 +756,7 @@ function SaveTemplateModal({
   return (
     <Modal title="Сохранить верд как шаблон" onClose={onClose}>
       <div className="stack">
-        <div>
+        <div className="field">
           <label>Название шаблона</label>
           <input
             value={name}
@@ -606,21 +766,23 @@ function SaveTemplateModal({
           />
         </div>
 
-        <label style={{ marginBottom: 0 }}>Что сохранить</label>
-        {fields.loading && <p className="muted">Загрузка…</p>}
-        {fields.data?.map((f) => (
-          <label className="row" key={f.key} style={{ margin: 0, fontSize: 14 }}>
-            <input
-              type="checkbox"
-              checked={picked.includes(f.key)}
-              style={{ width: "auto", marginRight: 8 }}
-              onChange={() => toggle(f.key)}
-            />
-            {f.label}
-          </label>
-        ))}
+        <div>
+          <label>Что сохранить</label>
+          {fields.loading && <p className="muted">Загрузка…</p>}
+          <div className="stack tight">
+            {fields.data?.map((f) => (
+              <label className="check" key={f.key}>
+                <input
+                  type="checkbox"
+                  checked={picked.includes(f.key)}
+                  onChange={() => toggle(f.key)}
+                />
+                {f.label}
+              </label>
+            ))}
+          </div>
+        </div>
 
-        {err && <div className="error">{err}</div>}
         <div className="row spread">
           <button className="ghost" onClick={onClose}>
             Отмена
@@ -666,8 +828,11 @@ function ChannelPicker({
   const inList = value === "" || known.has(value);
 
   return (
-    <div className="stack" style={{ gap: 6 }}>
-      <select value={inList ? value : "__manual__"} onChange={(e) => onChange(e.target.value === "__manual__" ? value : e.target.value)}>
+    <div className="stack tight">
+      <select
+        value={inList ? value : "__manual__"}
+        onChange={(e) => onChange(e.target.value === "__manual__" ? value : e.target.value)}
+      >
         <option value="">— не выбран —</option>
         {registered.length > 0 && (
           <optgroup label="Привязанные к проекту">
@@ -692,6 +857,7 @@ function ChannelPicker({
         <option value="__manual__">— ввести ID вручную —</option>
       </select>
       <input
+        className="mono"
         value={value}
         placeholder="Discord channel_id"
         onChange={(e) => onChange(e.target.value)}
@@ -712,12 +878,11 @@ function AttachmentsSection({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const toast = useToast();
 
   async function upload(files: FileList | null) {
     if (!files || files.length === 0) return;
     setBusy(true);
-    setErr(null);
     try {
       const uploaded: Attachment[] = [];
       for (const file of Array.from(files)) {
@@ -725,7 +890,7 @@ function AttachmentsSection({
       }
       onChange([...attachments, ...uploaded]);
     } catch (e) {
-      setErr(String(e));
+      toast.err(e);
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -733,13 +898,17 @@ function AttachmentsSection({
   }
 
   return (
-    <section className="card">
-      <div className="row spread">
-        <h3 style={{ margin: 0 }}>Вложения</h3>
-        <button className="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>
+    <Section
+      id="post-attachments"
+      title="Вложения"
+      defaultOpen={attachments.length > 0}
+      summary={attachments.length > 0 ? `${attachments.length} файл(ов)` : "нет"}
+      actions={
+        <button className="ghost small" disabled={busy} onClick={() => fileRef.current?.click()}>
           {busy ? "Загрузка…" : "+ файл"}
         </button>
-      </div>
+      }
+    >
       <input
         ref={fileRef}
         type="file"
@@ -747,38 +916,70 @@ function AttachmentsSection({
         style={{ display: "none" }}
         onChange={(e) => upload(e.target.files)}
       />
-      {err && <div className="error">{err}</div>}
       {attachments.length === 0 && <p className="muted">Вложений нет.</p>}
-      {attachments.map((a) => (
-        <div className="row spread" key={a.url} style={{ marginTop: 8 }}>
-          <span>
-            📎 {a.filename}{" "}
-            <span className="muted" style={{ fontSize: 13 }}>
-              {(a.size / 1024).toFixed(1)} КБ
+      <div className="stack tight">
+        {attachments.map((a) => (
+          <div className="row spread" key={a.url}>
+            <span>
+              📎 {a.filename} <span className="muted">{(a.size / 1024).toFixed(1)} КБ</span>
             </span>
-          </span>
-          <button
-            className="ghost danger"
-            onClick={() => onChange(attachments.filter((x) => x.url !== a.url))}
-          >
-            ✕
-          </button>
-        </div>
-      ))}
-    </section>
+            <button
+              className="icon danger"
+              title="Убрать"
+              onClick={() => onChange(attachments.filter((x) => x.url !== a.url))}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
+    </Section>
   );
 }
 
-/** Правки сущностей: операции над атрибутами, включая вычисления. */
+/**
+ * Правки сущностей: операции над атрибутами, включая вычисления.
+ *
+ * Самый опасный экран дашборда — публикация применяет правки необратимо.
+ * Поэтому пути подсказываются из реальных атрибутов выбранной сущности, а
+ * рядом с каждой операцией сервер считает «было → станет» на копии данных.
+ */
 function EditsSection({
+  projectId,
   entities,
   edits,
   onChange,
 }: {
+  projectId: number;
   entities: Entity[];
   edits: EntityEdit[];
   onChange: (e: EntityEdit[]) => void;
 }) {
+  const [preview, setPreview] = useState<EditPreview[]>([]);
+  // Правки летят на сервер не на каждое нажатие клавиши.
+  const settled = useDebounced(JSON.stringify(normalizeEdits(edits)), 400);
+
+  useEffect(() => {
+    const payload: EntityEdit[] = JSON.parse(settled);
+    if (payload.every((e) => e.ops.length === 0)) {
+      setPreview([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .previewEdits(projectId, payload)
+      .then((rows) => {
+        if (!cancelled) setPreview(rows);
+      })
+      .catch(() => {
+        // Предпросмотр — вспомогательный: молчим, ошибку покажет публикация.
+        if (!cancelled) setPreview([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, settled]);
+
   function addEdit() {
     if (entities.length === 0) return;
     onChange([...edits, { entity_id: entities[0].id, ops: [] }]);
@@ -796,94 +997,124 @@ function EditsSection({
   }
 
   return (
-    <section className="card">
-      <div className="row spread">
-        <h3 style={{ margin: 0 }}>Правки сущностей</h3>
+    <div className="stack">
+      <Hint id="post-edits">
+        Применяются при публикации. В режиме «вычислить» можно писать формулы по атрибутам:{" "}
+        <code>ВС.людские_ресурсы - 10</code>, <code>min(экономика.ВВП * 1.05, 5000)</code>.
+        Доступны вычисляемые поля (<code>казна + выч.бюджет.итого</code>) и списки:{" "}
+        <code>длина(духи)</code>, <code>сумма(гигаструктуры, "мощь")</code>.
+      </Hint>
+
+      {entities.length === 0 && <p className="muted">Сначала создайте сущности.</p>}
+
+      {edits.map((edit, i) => {
+        const entity = entities.find((e) => e.id === edit.entity_id);
+        const paths = attrPaths(entity?.attributes ?? {});
+        const rows = preview.find((p) => p.entity_id === edit.entity_id)?.rows ?? [];
+        return (
+          <section className="card" key={i}>
+            <div className="row spread">
+              <select
+                className="grow"
+                value={edit.entity_id}
+                onChange={(e) => patchEdit(i, { entity_id: Number(e.target.value) })}
+              >
+                {entities.map((en) => (
+                  <option key={en.id} value={en.id}>
+                    {en.label}
+                  </option>
+                ))}
+              </select>
+              <div className="row">
+                <button className="ghost small" onClick={() => addOp(i)}>
+                  + правка
+                </button>
+                <button
+                  className="icon danger"
+                  title="Убрать сущность из верда"
+                  onClick={() => onChange(edits.filter((_, idx) => idx !== i))}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Пути реальных атрибутов этой сущности — чтобы не набирать по памяти. */}
+            <datalist id={`paths-${i}`}>
+              {paths.map((p) => (
+                <option key={p} value={p} />
+              ))}
+            </datalist>
+
+            {edit.ops.length === 0 && <p className="muted">Операций нет.</p>}
+            <div className="stack tight" style={{ marginTop: "var(--s2)" }}>
+              {edit.ops.map((op, j) => {
+                const row = rows.find((r) => r.path === op.path.trim());
+                return (
+                  <div key={j}>
+                    <div className="row">
+                      <input
+                        className="mono grow"
+                        list={`paths-${i}`}
+                        placeholder="путь.через.точку"
+                        value={op.path}
+                        onChange={(e) => patchOp(i, j, { path: e.target.value })}
+                      />
+                      <select
+                        value={op.mode}
+                        style={{ width: 140 }}
+                        onChange={(e) => patchOp(i, j, { mode: e.target.value as EditMode })}
+                      >
+                        {(Object.keys(MODE_LABEL) as EditMode[]).map((m) => (
+                          <option key={m} value={m}>
+                            {MODE_LABEL[m]}
+                          </option>
+                        ))}
+                      </select>
+                      {op.mode !== "delete" && (
+                        <input
+                          className={op.mode === "expr" ? "mono grow" : "grow"}
+                          placeholder={op.mode === "expr" ? "ВС.танки - 10" : "значение"}
+                          value={String(op.value ?? "")}
+                          onChange={(e) => patchOp(i, j, { value: e.target.value })}
+                        />
+                      )}
+                      <button
+                        className="icon danger"
+                        title="Удалить правку"
+                        onClick={() =>
+                          patchEdit(i, { ops: edit.ops.filter((_, idx) => idx !== j) })
+                        }
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    {row && (
+                      <div className="hint" style={{ margin: "2px 0 0" }}>
+                        {row.error ? (
+                          <span className="error">⚠ {row.error}</span>
+                        ) : (
+                          <>
+                            было <span className="calc-value">{row.before}</span> →{" "}
+                            <span className={row.changed ? "calc-value" : "muted"}>{row.after}</span>
+                            {!row.changed && " (без изменений)"}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+
+      <div className="row">
         <button className="ghost" onClick={addEdit} disabled={entities.length === 0}>
           + сущность
         </button>
       </div>
-      <p className="muted" style={{ fontSize: 13 }}>
-        Применяются при публикации. В режиме «вычислить» можно писать формулы по атрибутам:{" "}
-        <code>ВС.людские_ресурсы - 10</code>, <code>политика.поддержка + 100</code>,{" "}
-        <code>min(экономика.ВВП * 1.05, 5000)</code>. Доступны вычисляемые поля типа
-        (<code>казна + выч.бюджет.итого</code>) и списки: <code>длина(духи)</code>,{" "}
-        <code>сумма(гигаструктуры, "мощь")</code>.
-      </p>
-      {entities.length === 0 && <p className="muted">Сначала создайте сущности.</p>}
-
-      {edits.map((edit, i) => (
-        <div
-          key={i}
-          className="stack"
-          style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginTop: 10 }}
-        >
-          <div className="row" style={{ gap: 8 }}>
-            <select
-              value={edit.entity_id}
-              style={{ flex: 1 }}
-              onChange={(e) => patchEdit(i, { entity_id: Number(e.target.value) })}
-            >
-              {entities.map((en) => (
-                <option key={en.id} value={en.id}>
-                  {en.label}
-                </option>
-              ))}
-            </select>
-            <button className="ghost" onClick={() => addOp(i)}>
-              + правка
-            </button>
-            <button
-              className="ghost danger"
-              onClick={() => onChange(edits.filter((_, idx) => idx !== i))}
-            >
-              ✕
-            </button>
-          </div>
-
-          {edit.ops.length === 0 && <p className="muted">Операций нет.</p>}
-          {edit.ops.map((op, j) => (
-            <div className="row" key={j} style={{ gap: 6 }}>
-              <input
-                placeholder="путь.через.точку"
-                value={op.path}
-                style={{ flex: 2 }}
-                onChange={(e) => patchOp(i, j, { path: e.target.value })}
-              />
-              <select
-                value={op.mode}
-                style={{ width: 130 }}
-                onChange={(e) => patchOp(i, j, { mode: e.target.value as EditMode })}
-              >
-                {(Object.keys(MODE_LABEL) as EditMode[]).map((m) => (
-                  <option key={m} value={m}>
-                    {MODE_LABEL[m]}
-                  </option>
-                ))}
-              </select>
-              {op.mode !== "delete" && (
-                <input
-                  placeholder={op.mode === "expr" ? "ВС.танки - 10" : "значение"}
-                  value={String(op.value ?? "")}
-                  style={{
-                    flex: 2,
-                    fontFamily: op.mode === "expr" ? "ui-monospace, monospace" : undefined,
-                  }}
-                  onChange={(e) => patchOp(i, j, { value: e.target.value })}
-                />
-              )}
-              <button
-                className="ghost danger"
-                onClick={() =>
-                  patchEdit(i, { ops: edit.ops.filter((_, idx) => idx !== j) })
-                }
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-      ))}
-    </section>
+    </div>
   );
 }

@@ -2,6 +2,9 @@ import { useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
+import { Empty, Skeleton } from "../../components/Empty";
+import { Hint } from "../../components/Hint";
+import { useConfirm, useToast } from "../../components/Feedback";
 import type { FieldType, FormField, RegistrationForm } from "../../types";
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
@@ -12,24 +15,42 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
 ];
 
 export function FormsTab({ projectId }: { projectId: number }) {
+  const confirm = useConfirm();
+  const toast = useToast();
   const forms = useAsync<RegistrationForm[]>(() => api.listForms(projectId), [projectId]);
   const [editing, setEditing] = useState<RegistrationForm | "new" | null>(null);
 
   return (
     <div>
-      <div className="row spread">
-        <h2 style={{ border: "none" }}>Формы регистрации</h2>
+      <div className="toolbar">
+        <h2 className="section-title" style={{ margin: 0 }}>
+          Формы регистрации
+        </h2>
+        <span style={{ flex: 1 }} />
         <button className="primary" onClick={() => setEditing("new")}>
           + Форма
         </button>
       </div>
-      <p className="muted">
-        Игроки заполняют форму в Discord командой <code>/register</code>. Заявки видны во вкладке «Заявки».
-      </p>
+      <Hint id="forms">
+        Игроки заполняют форму в Discord командой <code>/register</code>. Поданные заявки ждут
+        решения во «Входящих».
+      </Hint>
 
-      {forms.loading && <p className="muted">Загрузка…</p>}
+      {forms.loading && <Skeleton rows={2} height={80} />}
       {forms.error && <p className="error">{forms.error}</p>}
-      {forms.data?.length === 0 && <p className="muted">Форм пока нет.</p>}
+      {forms.data?.length === 0 && (
+        <Empty
+          icon="📋"
+          title="Форм пока нет"
+          action={
+            <button className="primary" onClick={() => setEditing("new")}>
+              Собрать форму
+            </button>
+          }
+        >
+          Форма — это анкета новичка: её ответы можно перенести в атрибуты созданной сущности.
+        </Empty>
+      )}
 
       <div className="stack">
         {forms.data?.map((f) => (
@@ -51,9 +72,19 @@ export function FormsTab({ projectId }: { projectId: number }) {
                 <button
                   className="ghost danger"
                   onClick={async () => {
-                    if (confirm(`Удалить форму «${f.title}»?`)) {
+                    const ok = await confirm({
+                      title: `Удалить форму «${f.title}»?`,
+                      body: "Уже поданные заявки останутся, но подать новую по ней будет нельзя.",
+                      confirmLabel: "Удалить",
+                      danger: true,
+                    });
+                    if (!ok) return;
+                    try {
                       await api.deleteForm(projectId, f.id);
+                      toast.ok("Форма удалена");
                       forms.reload();
+                    } catch (e) {
+                      toast.err(e);
                     }
                   }}
                 >
@@ -134,7 +165,7 @@ function FormEditor({
   }
 
   return (
-    <Modal title={form ? "Редактирование формы" : "Новая форма"} onClose={onClose}>
+    <Modal title={form ? "Редактирование формы" : "Новая форма"} wide onClose={onClose}>
       <div className="stack">
         <div className="row" style={{ gap: 12 }}>
           <div style={{ flex: 2 }}>

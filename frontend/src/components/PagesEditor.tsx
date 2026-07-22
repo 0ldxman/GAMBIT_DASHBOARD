@@ -133,22 +133,3 @@ export function PagesEditor({
   );
 }
 
-/** Предпросмотр готовых страниц: в Discord они листаются кнопками. */
-export function PagesPreview({ pages, error }: { pages?: RenderedPage[]; error?: string | null }) {
-  if (error) return <div className="error">{error}</div>;
-  if (!pages || pages.length === 0) return <p className="muted">Описание пустое.</p>;
-  return (
-    <div className="stack" style={{ gap: 8 }}>
-      {pages.map((p, i) => (
-        <div key={i}>
-          {pages.length > 1 && (
-            <span className="muted" style={{ fontSize: 13 }}>
-              Страница {i + 1} из {pages.length}
-            </span>
-          )}
-          <div className="embed-preview">{p.rendered || " "}</div>
-        </div>
-      ))}
-    </div>
-  );
-}

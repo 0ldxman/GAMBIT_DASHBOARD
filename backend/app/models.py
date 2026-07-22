@@ -169,6 +169,10 @@ class Entity(Base):
     # Особое описание: страницы этой сущности вместо страниц её типа.
     use_custom_description: Mapped[bool] = mapped_column(default=False)
     description_pages: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Собственные формулы сущности — тот же формат, что у типа. В отличие от
+    # описания они не замещают типовые, а ДОПОЛНЯЮТ их: совпадение путей
+    # переопределяет одну формулу, остальные продолжают работать (app/computed.py).
+    computed: Mapped[list[Any]] = mapped_column(JSONB, default=list)
 
     project: Mapped[Project] = relationship(back_populates="entities")
     type: Mapped[Optional[EntityType]] = relationship(back_populates="entities")

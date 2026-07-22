@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
+import { useConfirm, useToast } from "../../components/Feedback";
 import type { DiscordChannel, EntityChannel } from "../../types";
 
 /** Каналы сущности: привязка существующих и создание новых прямо из дашборда. */
@@ -20,6 +21,9 @@ export function ChannelsSection({
     () => api.availableChannels(projectId).catch(() => []),
     [projectId],
   );
+
+  const confirm = useConfirm();
+  const toast = useToast();
 
   const [selected, setSelected] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -53,9 +57,20 @@ export function ChannelsSection({
   }
 
   async function unlink(l: EntityChannel) {
-    if (!confirm("Отвязать канал? Сам канал в Discord останется, доступ пересчитается.")) return;
-    await api.unlinkEntityChannel(projectId, entityId, l.id);
-    links.reload();
+    const ok = await confirm({
+      title: `Отвязать канал ${l.label ? `«${l.label}»` : ""}?`,
+      body: "Сам канал в Discord останется, но доступ игроков к нему пересчитается.",
+      confirmLabel: "Отвязать",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.unlinkEntityChannel(projectId, entityId, l.id);
+      toast.ok("Канал отвязан");
+      links.reload();
+    } catch (e) {
+      toast.err(e);
+    }
   }
 
   return (

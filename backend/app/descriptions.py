@@ -5,7 +5,9 @@
 описание, и оно ЗАМЕЩАЕТ шаблон типа целиком (а не дополняет его).
 
 Вычисляемые поля берутся у типа в любом случае: особое описание меняет вид
-карточки, а не правила расчёта бюджета.
+карточки, а не правила расчёта бюджета. К типовым формулам добавляются
+собственные формулы сущности — они дополняют список, а совпадение путей
+переопределяет одну формулу (см. app/computed.merge).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.computed import ComputedValue
 from app.computed import compute
+from app.computed import merge
 from app.computed import template_extra
 from app.models import Entity
 from app.models import EntityType
@@ -39,12 +42,17 @@ async def description_pages(entity: Entity, db: AsyncSession) -> list[str]:
     return as_pages(entity_type.description_pages, entity_type.attributes_template)
 
 
+async def entity_fields(entity: Entity, db: AsyncSession) -> list[dict[str, str]]:
+    """Формулы, действующие для сущности: типовые, поверх них — собственные."""
+    entity_type = await _entity_type(entity, db)
+    return merge(entity_type.computed if entity_type else [], entity.computed)
+
+
 async def entity_computed(
     entity: Entity, db: AsyncSession
 ) -> tuple[dict[str, Any], list[ComputedValue]]:
-    """Посчитать формулы типа на атрибутах сущности."""
-    entity_type = await _entity_type(entity, db)
-    return compute(entity_type.computed if entity_type else [], entity.attributes)
+    """Посчитать формулы сущности на её же атрибутах."""
+    return compute(await entity_fields(entity, db), entity.attributes)
 
 
 async def render_entity_pages(entity: Entity, db: AsyncSession) -> list[str]:

@@ -1,63 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
-import { useAsync } from "../hooks";
+import { useAsync, useChanges } from "../hooks";
 import { PingBell } from "../components/PingBell";
-import { JsonEditor } from "../components/JsonEditor";
-import { PagesEditor, PagesPreview } from "../components/PagesEditor";
-import { ComputedValues } from "../components/ComputedEditor";
-import type { Entity, EntityPingCount, EntityType, TemplatePages } from "../types";
+import { PagesEditor } from "../components/PagesEditor";
+import { ComputedEditor } from "../components/ComputedEditor";
+import { EntityCard } from "../components/EntityCard";
+import { Section } from "../components/Section";
+import { Hint } from "../components/Hint";
+import { SaveBar } from "../components/SaveBar";
+import { useToast } from "../components/Feedback";
+import type {
+  ComputedField,
+  Entity,
+  EntityPingCount,
+  EntityType,
+  Project,
+  TemplatePages,
+} from "../types";
+import { AttributesEditor } from "./entity/AttributesEditor";
 import { MembersSection } from "./entity/MembersSection";
 import { RelationsSection } from "./entity/RelationsSection";
 import { ChannelsSection } from "./entity/ChannelsSection";
 
-interface AttrRow {
-  key: string;
-  value: string;
-}
-
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** Вложенный объект → строки с dot-path ключами: {ВС:{танки:1}} → "ВС.танки". */
-function flatten(obj: Record<string, unknown>, prefix = ""): AttrRow[] {
-  const rows: AttrRow[] = [];
-  for (const [key, value] of Object.entries(obj)) {
-    const path = prefix ? `${prefix}.${key}` : key;
-    if (isPlainObject(value) && Object.keys(value).length > 0) {
-      rows.push(...flatten(value, path));
-    } else {
-      rows.push({
-        key: path,
-        value: typeof value === "string" ? value : JSON.stringify(value),
-      });
-    }
-  }
-  return rows;
-}
-
-/** Строки с dot-path ключами → вложенный объект. */
-function unflatten(rows: AttrRow[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const { key, value } of rows) {
-    const path = key.trim();
-    if (!path) continue;
-    // Числа/булевы/массивы разбираем как JSON, остальное — строка.
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(value);
-    } catch {
-      parsed = value;
-    }
-    const parts = path.split(".");
-    let node = out;
-    for (const part of parts.slice(0, -1)) {
-      if (!isPlainObject(node[part])) node[part] = {};
-      node = node[part] as Record<string, unknown>;
-    }
-    node[parts[parts.length - 1]] = parsed;
-  }
-  return out;
+/** Пути атрибутов для подсказки в формулах: до листа, списки — целиком. */
+function attrPaths(value: unknown, prefix = ""): string[] {
+  if (!isPlainObject(value)) return prefix ? [prefix] : [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    attrPaths(item, prefix ? `${prefix}.${key}` : key),
+  );
 }
 
 /** Загруженный файл лежит на backend — в дашборде его отдаёт /api. */
@@ -77,18 +51,17 @@ function PictureField({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const toast = useToast();
 
   async function upload(files: FileList | null) {
     const file = files?.[0];
     if (!file) return;
     setBusy(true);
-    setErr(null);
     try {
       const att = await api.uploadAttachment(projectId, file);
       onChange(att.url);
     } catch (e) {
-      setErr(String(e));
+      toast.err(e);
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -96,25 +69,13 @@ function PictureField({
   }
 
   return (
-    <div>
-      <div className="row spread">
-        <label style={{ margin: 0 }}>Картинка сущности</label>
-        <div className="row" style={{ gap: 6 }}>
-          <button className="ghost" disabled={busy} onClick={() => fileRef.current?.click()}>
-            {busy ? "Загрузка…" : "Загрузить файл"}
-          </button>
-          {value && (
-            <button className="ghost danger" onClick={() => onChange("")}>
-              Убрать
-            </button>
-          )}
-        </div>
-      </div>
-      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-        Аватарка сущности в карточке и в сообщениях, отправленных от её лица.
-        Загруженный файл Discord увидит, только если у backend задан PUBLIC_BASE_URL;
-        иначе надёжнее вставить внешнюю ссылку.
-      </p>
+    <div className="field">
+      <label>Картинка сущности</label>
+      <Hint id="entity-picture">
+        Аватарка сущности в карточке и в сообщениях, отправленных от её лица. Загруженный файл
+        Discord увидит, только если у backend задан <code>PUBLIC_BASE_URL</code>; иначе надёжнее
+        вставить внешнюю ссылку.
+      </Hint>
       <input
         ref={fileRef}
         type="file"
@@ -122,24 +83,40 @@ function PictureField({
         style={{ display: "none" }}
         onChange={(e) => upload(e.target.files)}
       />
-      <div className="row" style={{ gap: 10, alignItems: "center" }}>
+      <div className="row">
         {value && (
           <img
             src={pictureSrc(value)}
             alt=""
-            style={{ width: 48, height: 48, borderRadius: 8, objectFit: "cover" }}
+            style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }}
           />
         )}
         <input
+          className="grow"
           value={value}
           placeholder="https://… или загрузите файл"
           onChange={(e) => onChange(e.target.value)}
         />
+        <button className="ghost small" disabled={busy} onClick={() => fileRef.current?.click()}>
+          {busy ? "Загрузка…" : "Файл"}
+        </button>
+        {value && (
+          <button className="ghost small danger" onClick={() => onChange("")}>
+            Убрать
+          </button>
+        )}
       </div>
-      {err && <div className="error">{err}</div>}
     </div>
   );
 }
+
+type Tab = "data" | "look" | "access";
+
+const TAB_LABEL: Record<Tab, string> = {
+  data: "Данные",
+  look: "Оформление",
+  access: "Доступ",
+};
 
 export function EntityPage() {
   const { projectId, entityId } = useParams();
@@ -147,6 +124,7 @@ export function EntityPage() {
   const eid = Number(entityId);
 
   const entity = useAsync<Entity>(() => api.getEntity(pid, eid), [pid, eid]);
+  const project = useAsync<Project>(() => api.getProject(pid), [pid]);
   const types = useAsync<EntityType[]>(() => api.listTypes(pid), [pid]);
   // Список сущностей проекта нужен для выбора второй стороны связи.
   const allEntities = useAsync<Entity[]>(() => api.listEntities(pid), [pid]);
@@ -155,42 +133,37 @@ export function EntityPage() {
     [pid],
   );
   const navigate = useNavigate();
+  const toast = useToast();
   const pingCount = pings.data?.find((p) => p.entity_id === eid)?.unread ?? 0;
 
+  const [tab, setTab] = useState<Tab>("data");
   const [label, setLabel] = useState("");
   const [picture, setPicture] = useState("");
   const [typeId, setTypeId] = useState<number | null>(null);
-  const [rows, setRows] = useState<AttrRow[]>([]);
-  const [jsonMode, setJsonMode] = useState(false);
-  const [jsonText, setJsonText] = useState("{}");
-  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [attributes, setAttributes] = useState<Record<string, unknown>>({});
+  // Растёт при загрузке и сбросе — по нему редактор атрибутов пересобирает строки.
+  const [attrVersion, setAttrVersion] = useState(0);
+  const [computed, setComputed] = useState<ComputedField[]>([]);
   const [preview, setPreview] = useState<TemplatePages | null>(null);
   const [custom, setCustom] = useState(false);
   const [customPages, setCustomPages] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+
+  function fillFrom(data: Entity) {
+    setLabel(data.label);
+    setPicture(data.picture);
+    setTypeId(data.type_id);
+    setAttributes(data.attributes);
+    setComputed(data.computed ?? []);
+    setCustom(data.use_custom_description);
+    setCustomPages(data.description_pages ?? []);
+    setAttrVersion((v) => v + 1);
+  }
 
   useEffect(() => {
-    if (!entity.data) return;
-    setLabel(entity.data.label);
-    setPicture(entity.data.picture);
-    setTypeId(entity.data.type_id);
-    setRows(flatten(entity.data.attributes));
-    setJsonText(JSON.stringify(entity.data.attributes, null, 2));
-    setCustom(entity.data.use_custom_description);
-    setCustomPages(entity.data.description_pages ?? []);
+    if (entity.data) fillFrom(entity.data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity.data]);
-
-  // Текущие атрибуты — из активного режима редактирования.
-  const attributes = useMemo<Record<string, unknown>>(() => {
-    if (!jsonMode) return unflatten(rows);
-    try {
-      const parsed = JSON.parse(jsonText || "{}");
-      return isPlainObject(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }, [jsonMode, rows, jsonText]);
 
   const type = useMemo(
     () => types.data?.find((t) => t.id === typeId) ?? null,
@@ -205,7 +178,8 @@ export function EntityPage() {
     return fromType.length > 0 ? fromType : [type.attributes_template || ""];
   }, [custom, customPages, type]);
 
-  // Живой предпросмотр embed.
+  // Живой предпросмотр: страницы и значения формул на текущих, ещё не
+  // сохранённых атрибутах.
   useEffect(() => {
     const handle = setTimeout(async () => {
       try {
@@ -214,9 +188,8 @@ export function EntityPage() {
             pages,
             attributes,
             label,
-            // Формулы всегда берутся у типа: особое описание меняет вид
-            // карточки, а не правила расчёта.
             computed: type?.computed ?? [],
+            computed_own: computed,
           }),
         );
       } catch (e) {
@@ -224,38 +197,32 @@ export function EntityPage() {
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [pid, pages, attributes, label, type]);
+  }, [pid, pages, attributes, label, type, computed]);
 
-  function switchMode(toJson: boolean) {
-    if (toJson) {
-      setJsonText(JSON.stringify(unflatten(rows), null, 2));
-      setJsonError(null);
-    } else {
-      try {
-        const parsed = JSON.parse(jsonText || "{}");
-        if (!isPlainObject(parsed)) throw new Error("Ожидается объект");
-        setRows(flatten(parsed));
-        setJsonError(null);
-      } catch (e) {
-        setJsonError(`Некорректный JSON: ${String(e)}`);
-        return;
-      }
-    }
-    setJsonMode(toJson);
-  }
+  const changed = useChanges(
+    {
+      label,
+      picture,
+      type_id: typeId,
+      attributes,
+      use_custom_description: custom,
+      description_pages: customPages,
+      computed,
+    },
+    entity.data,
+    {
+      label: "название",
+      picture: "картинка",
+      type_id: "тип",
+      attributes: "атрибуты",
+      use_custom_description: "описание",
+      description_pages: "описание",
+      computed: "формулы",
+    },
+  );
 
   async function save() {
-    if (jsonMode) {
-      try {
-        const parsed = JSON.parse(jsonText || "{}");
-        if (!isPlainObject(parsed)) throw new Error("Ожидается объект");
-      } catch (e) {
-        setMsg(`Некорректный JSON: ${String(e)}`);
-        return;
-      }
-    }
     setSaving(true);
-    setMsg(null);
     try {
       await api.updateEntity(pid, eid, {
         label,
@@ -264,15 +231,20 @@ export function EntityPage() {
         attributes,
         use_custom_description: custom,
         description_pages: customPages,
+        computed,
       });
-      setMsg("Сохранено");
+      toast.ok("Сохранено");
       entity.reload();
     } catch (e) {
-      setMsg(String(e));
+      toast.err(e);
     } finally {
       setSaving(false);
     }
   }
+
+  const calcErrors = (preview?.computed ?? []).filter((v) => v.error).length;
+  const ownCount = computed.length;
+  const typeCount = type?.computed?.length ?? 0;
 
   if (entity.loading) return <p className="muted">Загрузка…</p>;
   if (entity.error) return <p className="error">{entity.error}</p>;
@@ -280,7 +252,16 @@ export function EntityPage() {
   return (
     <div>
       <div className="crumbs">
-        <Link to="/">Проекты</Link> / <Link to={`/projects/${pid}`}>Проект</Link> /{" "}
+        <Link to="/">Серверы</Link>
+        {project.data?.guild_id && (
+          <>
+            {" / "}
+            <Link to={`/servers/${project.data.guild_id}`}>сервер</Link>
+          </>
+        )}
+        {" / "}
+        <Link to={`/projects/${pid}?tab=entities`}>{project.data?.label ?? "Проект"}</Link>
+        {" / "}
         {entity.data?.label}
       </div>
 
@@ -300,186 +281,177 @@ export function EntityPage() {
               : ""}
           </p>
         </div>
-        <div className="row" style={{ gap: 8 }}>
-          <button
-            className="ghost"
-            onClick={() => navigate(`/projects/${pid}/posts/new?entity=${eid}`)}
-          >
-            Написать верд
-          </button>
-          <button className="primary" disabled={saving} onClick={save}>
-            {saving ? "Сохранение…" : "Сохранить"}
-          </button>
-        </div>
+        <button
+          className="ghost"
+          onClick={() => navigate(`/projects/${pid}/posts/new?entity=${eid}`)}
+        >
+          Написать верд
+        </button>
       </header>
-      {msg && <div className={msg === "Сохранено" ? "muted" : "error"}>{msg}</div>}
+
+      <div className="subtabs" style={{ marginBottom: "var(--s4)" }}>
+        {(Object.keys(TAB_LABEL) as Tab[]).map((key) => (
+          <button
+            key={key}
+            className={tab === key ? "active" : ""}
+            onClick={() => setTab(key)}
+          >
+            {TAB_LABEL[key]}
+          </button>
+        ))}
+      </div>
 
       <div className="entity-layout">
         <div className="stack">
-          <section className="card">
-            <h3 style={{ marginTop: 0 }}>Основное</h3>
-            <div>
-              <label>Название</label>
-              <input value={label} onChange={(e) => setLabel(e.target.value)} />
-            </div>
-            <div>
-              <label>Тип</label>
-              <select
-                value={typeId ?? ""}
-                onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : null)}
+          {tab === "data" && (
+            <>
+              <Section
+                id="entity-main"
+                title="Основное"
+                defaultOpen={false}
+                summary={`${type?.label ?? "без типа"}${picture ? " · с картинкой" : ""}`}
               >
-                <option value="">— без типа —</option>
-                {types.data?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <PictureField projectId={pid} value={picture} onChange={setPicture} />
-          </section>
-
-          {/* --- особое описание вместо шаблона типа --- */}
-          <section className="card">
-            <div className="row spread">
-              <h3 style={{ margin: 0 }}>Особое описание</h3>
-              <label className="row" style={{ margin: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={custom}
-                  style={{ width: "auto", marginRight: 8 }}
-                  onChange={(e) => {
-                    // Включили впервые — начинаем со страниц типа, чтобы было что править.
-                    if (e.target.checked && customPages.length === 0) setCustomPages(pages);
-                    setCustom(e.target.checked);
-                  }}
-                />
-                включить
-              </label>
-            </div>
-            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-              {custom
-                ? "Эти страницы полностью замещают описание, которое даёт тип."
-                : `Сейчас описание берётся из типа${type ? ` «${type.label}»` : ""}. Включите, чтобы задать своё.`}
-            </p>
-            {custom && (
-              <PagesEditor
-                pages={customPages}
-                onChange={setCustomPages}
-                rendered={preview?.pages}
-                limit={preview?.limit ?? 2000}
-                hint={
-                  <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-                    Атрибуты подставляются так же, как в типе: <code>{"{{ население }}"}</code>.
-                    Страницы листаются в Discord кнопками.
-                  </p>
-                }
-              />
-            )}
-          </section>
-
-          {/* --- атрибуты --- */}
-          <section className="card">
-            <div className="row spread">
-              <label style={{ margin: 0 }}>Атрибуты</label>
-              <div className="row" style={{ gap: 6 }}>
-                <button className="ghost" onClick={() => switchMode(!jsonMode)}>
-                  {jsonMode ? "← Поля" : "JSON →"}
-                </button>
-                {!jsonMode && (
-                  <button className="ghost" onClick={() => setRows([...rows, { key: "", value: "" }])}>
-                    + атрибут
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {!jsonMode && (
-              <>
-                <p className="muted" style={{ fontSize: 13 }}>
-                  Вложенность — через точку: <code>ВС.людские_ресурсы</code>. В шаблоне:{" "}
-                  <code>{"{{ ВС.людские_ресурсы }}"}</code>
-                </p>
-                {rows.map((r, i) => (
-                  <div className="kv-row" key={i} style={{ marginTop: 8 }}>
-                    <input
-                      placeholder="ключ или путь.через.точку"
-                      value={r.key}
-                      onChange={(e) =>
-                        setRows(rows.map((x, idx) => (idx === i ? { ...x, key: e.target.value } : x)))
-                      }
-                    />
-                    <input
-                      placeholder="значение"
-                      value={r.value}
-                      onChange={(e) =>
-                        setRows(rows.map((x, idx) => (idx === i ? { ...x, value: e.target.value } : x)))
-                      }
-                    />
-                    <button
-                      className="ghost danger"
-                      onClick={() => setRows(rows.filter((_, idx) => idx !== i))}
-                    >
-                      ✕
-                    </button>
+                <div className="fields two">
+                  <div className="field">
+                    <label>Название</label>
+                    <input value={label} onChange={(e) => setLabel(e.target.value)} />
                   </div>
-                ))}
-                {rows.length === 0 && <p className="muted">Атрибутов нет.</p>}
-              </>
-            )}
+                  <div className="field">
+                    <label>Тип</label>
+                    <select
+                      value={typeId ?? ""}
+                      onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : null)}
+                    >
+                      <option value="">— без типа —</option>
+                      {types.data?.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <PictureField projectId={pid} value={picture} onChange={setPicture} />
+              </Section>
 
-            {jsonMode && (
-              <>
-                <p className="muted" style={{ fontSize: 13 }}>
-                  Полный JSON атрибутов — удобно для глубокой вложенности и списков.
-                  Tab — отступ, Shift+Tab — снять, Escape затем Tab — выйти из поля.
-                </p>
-                <JsonEditor
-                  value={jsonText}
-                  onChange={(v) => {
-                    setJsonText(v);
-                    try {
-                      JSON.parse(v || "{}");
-                      setJsonError(null);
-                    } catch (err) {
-                      setJsonError(String(err));
-                    }
-                  }}
+              <Section
+                id="entity-attrs"
+                title="Атрибуты"
+                summary={`${Object.keys(attributes).length} верхнего уровня`}
+              >
+                <Hint id="entity-attrs">
+                  Вложенность — через точку: <code>ВС.людские_ресурсы</code>. В шаблоне это{" "}
+                  <code>{"{{ ВС.людские_ресурсы }}"}</code>. Значение разбирается как JSON, если
+                  получается: <code>1200</code> станет числом, <code>["а","б"]</code> — списком.
+                </Hint>
+                <AttributesEditor
+                  initial={entity.data?.attributes ?? {}}
+                  version={attrVersion}
+                  onChange={setAttributes}
                 />
-                {jsonError && <div className="error">{jsonError}</div>}
-              </>
-            )}
-          </section>
+              </Section>
 
-          {/* --- формулы типа на атрибутах этой сущности --- */}
-          {(preview?.computed?.length ?? 0) > 0 && (
-            <section className="card">
-              <div className="row spread">
-                <label style={{ margin: 0 }}>Вычисляемые</label>
-                <span className="muted" style={{ fontSize: 13 }}>
-                  из типа «{type?.label}»
-                </span>
-              </div>
-              <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-                Считается по атрибутам выше — прямо сейчас, до сохранения.
-                Правится в типе сущности.
-              </p>
-              <ComputedValues values={preview?.computed} />
-            </section>
+              <Section
+                id="entity-computed"
+                title="Вычисляемые"
+                warn={calcErrors > 0}
+                summary={
+                  calcErrors > 0
+                    ? `${calcErrors} с ошибкой`
+                    : `${typeCount + ownCount} ${ownCount > 0 ? `(своих ${ownCount})` : "из типа"}`
+                }
+              >
+                <Hint id="entity-computed">
+                  Формулы считаются по атрибутам выше — прямо сейчас, до сохранения. Типовые
+                  правятся в типе сущности, но любую можно переопределить здесь, а можно завести
+                  свою: <code>сумма(корабли, "тоннаж")</code>. В шаблоне доступны как{" "}
+                  <code>{"{{ выч.бюджет.деньги }}"}</code>.
+                </Hint>
+                <ComputedEditor
+                  fields={computed}
+                  onChange={setComputed}
+                  inherited={type?.computed ?? []}
+                  inheritedFrom={type?.label ?? ""}
+                  values={preview?.computed}
+                  paths={attrPaths(attributes)}
+                />
+              </Section>
+            </>
           )}
 
-          {/* --- игроки, связи и каналы: сохраняются сразу, отдельно от полей выше --- */}
-          <MembersSection projectId={pid} entityId={eid} onChanged={() => entity.reload()} />
-          <RelationsSection projectId={pid} entityId={eid} entities={allEntities.data ?? []} />
-          <ChannelsSection projectId={pid} entityId={eid} />
+          {tab === "look" && (
+            <Section
+              id="entity-desc"
+              title="Особое описание"
+              summary={custom ? `${customPages.length} стр.` : "берётся из типа"}
+              actions={
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={custom}
+                    onChange={(e) => {
+                      // Включили впервые — начинаем со страниц типа, чтобы было что править.
+                      if (e.target.checked && customPages.length === 0) setCustomPages(pages);
+                      setCustom(e.target.checked);
+                    }}
+                  />
+                  включить
+                </label>
+              }
+            >
+              <p className="hint">
+                {custom
+                  ? "Эти страницы полностью замещают описание, которое даёт тип. Формулы при этом остаются общими — и типовые, и свои."
+                  : `Сейчас описание берётся из типа${type ? ` «${type.label}»` : ""}. Включите галочку, чтобы задать своё.`}
+              </p>
+              {custom && (
+                <PagesEditor
+                  pages={customPages}
+                  onChange={setCustomPages}
+                  rendered={preview?.pages}
+                  limit={preview?.limit ?? 2000}
+                  hint={
+                    <Hint id="entity-pages">
+                      Атрибуты подставляются так же, как в типе: <code>{"{{ население }}"}</code>.
+                      Страницы игрок листает в Discord кнопками.
+                    </Hint>
+                  }
+                />
+              )}
+            </Section>
+          )}
+
+          {/* Игроки, связи и каналы сохраняются сразу, отдельно от полей выше. */}
+          {tab === "access" && (
+            <>
+              <MembersSection projectId={pid} entityId={eid} onChanged={() => entity.reload()} />
+              <RelationsSection projectId={pid} entityId={eid} entities={allEntities.data ?? []} />
+              <ChannelsSection projectId={pid} entityId={eid} />
+            </>
+          )}
         </div>
 
-        {/* --- предпросмотр --- */}
-        <aside className="entity-aside">
-          <label>Предпросмотр embed (как в Discord /me-info)</label>
-          <PagesPreview pages={preview?.pages} error={preview?.error} />
+        <aside className="entity-aside stack">
+          <div>
+            <h2 className="section-title">Карточка игрока (/me-info)</h2>
+            <EntityCard
+              label={label}
+              picture={picture ? pictureSrc(picture) : ""}
+              pages={preview?.pages}
+              error={preview?.error}
+              limit={preview?.limit ?? 2000}
+            />
+          </div>
         </aside>
       </div>
+
+      <SaveBar
+        dirty={changed.length > 0}
+        changed={changed}
+        saving={saving}
+        onSave={save}
+        onReset={() => entity.data && fillFrom(entity.data)}
+      />
     </div>
   );
 }

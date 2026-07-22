@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import { Empty, Skeleton } from "../components/Empty";
 import { useAsync } from "../hooks";
 import { Modal } from "../components/Modal";
 import { CategoryPicker } from "../components/CategoryPicker";
@@ -53,10 +54,21 @@ export function ServerPage() {
 
       <h2 className="section-title">Проекты</h2>
 
-      {projects.loading && <p className="muted">Загрузка…</p>}
+      {projects.loading && <Skeleton rows={2} height={150} />}
       {projects.error && <p className="error">{projects.error}</p>}
       {projects.data?.length === 0 && (
-        <p className="muted">На этом сервере пока нет проектов. Создайте первый.</p>
+        <Empty
+          icon="🗺"
+          title="На этом сервере пока нет проектов"
+          action={
+            <button className="primary" onClick={() => setCreating(true)}>
+              Создать проект
+            </button>
+          }
+        >
+          Проект — это одна игра: свои категории каналов, сущности, типы и верды. На одном
+          сервере их может идти несколько.
+        </Empty>
       )}
 
       <div className="project-grid">

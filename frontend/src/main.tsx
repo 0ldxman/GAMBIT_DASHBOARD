@@ -7,6 +7,7 @@ import {
 } from "react-router-dom";
 import "./styles.css";
 import { AuthProvider, useAuth } from "./auth";
+import { FeedbackProvider } from "./components/Feedback";
 import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
 import { Servers } from "./pages/Servers";
@@ -45,7 +46,9 @@ const router = createBrowserRouter([
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AuthProvider>
-      <RouterProvider router={router} />
+      <FeedbackProvider>
+        <RouterProvider router={router} />
+      </FeedbackProvider>
     </AuthProvider>
   </StrictMode>,
 );

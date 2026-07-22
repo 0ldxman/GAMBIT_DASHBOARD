@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { Empty, Skeleton } from "../components/Empty";
 import { useAsync } from "../hooks";
 import type { DiscordGuild } from "../types";
 
@@ -14,7 +15,7 @@ export function Servers() {
         Серверы, куда приглашён бот. Внутри сервера — проекты, которые на нём идут.
       </p>
 
-      {guilds.loading && <p className="muted">Загрузка…</p>}
+      {guilds.loading && <Skeleton rows={2} height={200} />}
       {guilds.error && (
         <div className="stack">
           <div className="error">{guilds.error}</div>
@@ -25,7 +26,10 @@ export function Servers() {
         </div>
       )}
       {guilds.data?.length === 0 && (
-        <p className="muted">Бот пока не добавлен ни на один сервер.</p>
+        <Empty icon="🤖" title="Бот не добавлен ни на один сервер">
+          Пригласите его на сервер Discord с правами <code>Manage Webhooks</code> и{" "}
+          <code>Send Messages</code> — сервер появится здесь сам.
+        </Empty>
       )}
 
       <div className="server-grid">

@@ -130,6 +130,9 @@ class ComputedValueOut(BaseModel):
     # Готовый к показу текст («12 400»); ошибка — вместо него.
     text: str = ""
     error: Optional[str] = None
+    # "type" — формула типа, "entity" — своя у сущности, "override" — своя
+    # вместо типовой. Дашборд по этому полю подписывает строку.
+    source: str = ""
 
 
 class EntityTypeBase(BaseModel):
@@ -178,6 +181,8 @@ class EntityBase(BaseModel):
     # Особое описание замещает страницы типа целиком.
     use_custom_description: bool = False
     description_pages: list[str] = Field(default_factory=list)
+    # Собственные формулы: дополняют формулы типа, совпадение путей — переопределяет.
+    computed: list[ComputedFieldIn] = Field(default_factory=list)
 
 
 class EntityCreate(EntityBase):
@@ -191,6 +196,7 @@ class EntityUpdate(BaseModel):
     attributes: Optional[dict[str, Any]] = None
     use_custom_description: Optional[bool] = None
     description_pages: Optional[list[str]] = None
+    computed: Optional[list[ComputedFieldIn]] = None
 
 
 # ---------- участники сущности ----------
@@ -258,6 +264,7 @@ class EntityOut(ORMModel):
     attributes: dict[str, Any]
     use_custom_description: bool = False
     description_pages: list[str] = Field(default_factory=list)
+    computed: list[ComputedFieldIn] = Field(default_factory=list)
     members: list[MemberOut] = Field(default_factory=list)
 
 
@@ -365,6 +372,9 @@ class TemplatePagesRequest(BaseModel):
     label: str = ""
     # Формулы типа: считаются на этих же атрибутах и подставляются в страницы.
     computed: list[ComputedFieldIn] = Field(default_factory=list)
+    # Собственные формулы сущности. Сливаются с типовыми на стороне сервера,
+    # чтобы правило слияния было одно и то же в предпросмотре и в Discord.
+    computed_own: list[ComputedFieldIn] = Field(default_factory=list)
 
 
 class RenderedPage(BaseModel):
@@ -379,6 +389,23 @@ class TemplatePagesResponse(BaseModel):
     limit: int
     error: Optional[str] = None
     computed: list[ComputedValueOut] = Field(default_factory=list)
+
+
+# ---------- предпросмотр правок верда ----------
+class EditPreviewRow(BaseModel):
+    """Одна правка: что было и что станет после публикации."""
+
+    path: str
+    before: str
+    after: str
+    changed: bool = False
+    error: Optional[str] = None
+
+
+class EditPreviewOut(BaseModel):
+    entity_id: int
+    label: str
+    rows: list[EditPreviewRow] = Field(default_factory=list)
 
 
 # ---------- post (верд) ----------
@@ -402,6 +429,12 @@ class EntityEdit(BaseModel):
     ops: list[EntityEditOp] = Field(default_factory=list)
     # Прежний формат (плоский/вложенный патч) — поддерживается для старых вердов.
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class EditsPreviewRequest(BaseModel):
+    """Правки, ещё не сохранённые в верде: считаем «было → станет» на лету."""
+
+    edits: list[EntityEdit] = Field(default_factory=list)
 
 
 class AttachmentOut(BaseModel):

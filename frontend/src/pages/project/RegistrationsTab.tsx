@@ -2,6 +2,8 @@ import { useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
+import { Empty, Skeleton } from "../../components/Empty";
+import { useConfirm, useToast } from "../../components/Feedback";
 import type { EntityType, Registration } from "../../types";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -15,7 +17,14 @@ const STATUS_BADGE: Record<string, string> = {
   rejected: "draft",
 };
 
-export function RegistrationsTab({ projectId }: { projectId: number }) {
+export function RegistrationsTab({
+  projectId,
+  onChange,
+}: {
+  projectId: number;
+  /** Дать проекту пересчитать счётчик входящих. */
+  onChange?: () => void;
+}) {
   const [filter, setFilter] = useState<string>("pending");
   const regs = useAsync<Registration[]>(
     () => api.listRegistrations(projectId, filter || undefined),
@@ -23,17 +32,30 @@ export function RegistrationsTab({ projectId }: { projectId: number }) {
   );
   const types = useAsync<EntityType[]>(() => api.listTypes(projectId), [projectId]);
   const [approving, setApproving] = useState<Registration | null>(null);
+  const confirm = useConfirm();
+  const toast = useToast();
 
   async function reject(r: Registration) {
-    if (!confirm("Отклонить заявку?")) return;
-    await api.rejectRegistration(projectId, r.id);
-    regs.reload();
+    const ok = await confirm({
+      title: `Отклонить заявку ${r.discord_username || r.discord_user_id}?`,
+      body: "Игрок останется без сущности. Заявку можно будет посмотреть в списке отклонённых.",
+      confirmLabel: "Отклонить",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.rejectRegistration(projectId, r.id);
+      toast.ok("Заявка отклонена");
+      regs.reload();
+      onChange?.();
+    } catch (e) {
+      toast.err(e);
+    }
   }
 
   return (
     <div>
-      <div className="row spread">
-        <h2 style={{ border: "none" }}>Заявки</h2>
+      <div className="toolbar">
         <select value={filter} style={{ width: 180 }} onChange={(e) => setFilter(e.target.value)}>
           <option value="">все</option>
           <option value="pending">ожидают</option>
@@ -42,9 +64,13 @@ export function RegistrationsTab({ projectId }: { projectId: number }) {
         </select>
       </div>
 
-      {regs.loading && <p className="muted">Загрузка…</p>}
+      {regs.loading && <Skeleton rows={2} height={80} />}
       {regs.error && <p className="error">{regs.error}</p>}
-      {regs.data?.length === 0 && <p className="muted">Заявок нет.</p>}
+      {regs.data?.length === 0 && (
+        <Empty icon="📨" title="Заявок нет">
+          Игроки подают их командой <code>/register</code> — форму соберите на вкладке «Формы».
+        </Empty>
+      )}
 
       <div className="stack">
         {regs.data?.map((r) => (
@@ -91,6 +117,7 @@ export function RegistrationsTab({ projectId }: { projectId: number }) {
           onDone={() => {
             setApproving(null);
             regs.reload();
+            onChange?.();
           }}
         />
       )}
