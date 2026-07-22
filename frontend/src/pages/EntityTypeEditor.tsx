@@ -9,6 +9,7 @@ import { buildSuggestions } from "../components/suggestions";
 import { ComputedEditor } from "../components/ComputedEditor";
 import { EntityCard } from "../components/EntityCard";
 import { Hint } from "../components/Hint";
+import { useWideLayout } from "../components/Layout";
 import { useToast } from "../components/Feedback";
 import type { ComputedField, EntityType, TemplatePages } from "../types";
 
@@ -30,7 +31,7 @@ const DEFAULT_PAGE: Page[] = [{ text: `**{{ label }}**
 Танки: {{ ВС.танки }}`, color: "" }];
 
 /** Типы связей для меню вставки: у типа нет своих связей, показываем частые. */
-const RELATION_HINTS = ["союзник", "враг", "состав"];
+const RELATION_HINTS = ["союзник", "война", "состав"];
 
 type Tab = "pages" | "computed" | "schema";
 
@@ -47,6 +48,7 @@ export function EntityTypeEditorPage() {
   const isNew = typeId === "new";
   const navigate = useNavigate();
   const toast = useToast();
+  useWideLayout();
 
   const types = useAsync<EntityType[]>(() => api.listTypes(pid), [pid]);
   const existing = isNew ? null : types.data?.find((t) => t.id === Number(typeId)) ?? null;
@@ -193,6 +195,7 @@ export function EntityTypeEditorPage() {
             <PagesEditor
               pages={pages}
               onChange={setPages}
+              scope="type"
               insertRef={insertRef}
               rendered={preview?.pages}
               limit={preview?.limit ?? 2000}
@@ -250,8 +253,10 @@ export function EntityTypeEditorPage() {
                 Новая сущность этого типа создаётся сразу с этими полями и значениями — их
                 останется только заполнить. Отсюда же берутся данные для предпросмотра справа и
                 подсказки путей в формулах. Вложенность — через точку (<code>ВС.танки</code>),
-                кнопка <code>☰</code> делает атрибут списком, а режим <b>JSON</b> показывает
-                всю структуру целиком — им удобно переносить заготовку между типами.
+                кнопка <code>☰</code> делает атрибут списком, переключатель <b>группы</b>{" "}
+                разбивает список по 1–3 уровням пути (<code>ЭКН.энергия.запас</code> при
+                глубине 2 — «ЭКН» → «энергия»), а режим <b>JSON</b> показывает всю структуру
+                целиком — им удобно переносить заготовку между типами.
               </Hint>
               <AttributesEditor
                 initial={schema}

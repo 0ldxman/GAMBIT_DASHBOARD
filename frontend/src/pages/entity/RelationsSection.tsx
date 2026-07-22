@@ -2,11 +2,10 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
+import { MUTUAL_TYPES, PRESETS, isHierarchyType } from "../../relations";
 import type { Entity, Relation } from "../../types";
 
-const PRESETS = ["состав", "член организации", "вассал", "подразделение", "союзник", "враг"];
-
-/** Связи сущности с другими: и дочерние, и родительские. */
+/** Связи сущности: взаимные («союзник») и иерархические («состав»). */
 export function RelationsSection({
   projectId,
   entityId,
@@ -21,13 +20,25 @@ export function RelationsSection({
     [projectId, entityId],
   );
   const [childId, setChildId] = useState<number | "">("");
-  const [type, setType] = useState(PRESETS[0]);
+  const [type, setType] = useState(MUTUAL_TYPES[0]);
+  const [directed, setDirected] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const nameOf = (id: number) => entities.find((e) => e.id === id)?.label ?? `#${id}`;
-  const children = (relations.data ?? []).filter((r) => r.parent_id === entityId);
-  const parents = (relations.data ?? []).filter((r) => r.child_id === entityId);
+  const list = relations.data ?? [];
+  const children = list.filter((r) => r.directed && r.parent_id === entityId);
+  const parents = list.filter((r) => r.directed && r.child_id === entityId);
+  // Взаимные связи иерархии не образуют: вторая сторона — та, что не эта.
+  const mutual = list.filter((r) => !r.directed);
+  const otherOf = (r: Relation) => (r.parent_id === entityId ? r.child_id : r.parent_id);
+
+  /** Знакомый тип сам ставит галочку — «состав» иерархичен, «союзник» нет. */
+  function pickType(next: string) {
+    setType(next);
+    const known = isHierarchyType(next);
+    if (known !== null) setDirected(known);
+  }
 
   async function add() {
     if (childId === "") return;
@@ -37,6 +48,7 @@ export function RelationsSection({
       await api.addRelation(projectId, entityId, {
         child_id: Number(childId),
         relation_type: type,
+        directed,
       });
       setChildId("");
       relations.reload();
@@ -61,13 +73,33 @@ export function RelationsSection({
         </Link>
       </div>
       <p className="hint">
-        Иерархия с характером связи. Сущность может входить сразу в несколько родителей —
-        например страна в блоке и в торговой организации. Тип связи виден в описании:{" "}
+        По умолчанию связь взаимна («союзник», «война») и видна с обеих сторон. Галочка
+        «родитель → дочерняя» делает её иерархической: страна входит в блок, провинция — в
+        страну. Тип связи виден в описании:{" "}
         <code>{'{{ связи.союзник | строки("{название}") }}'}</code>.
       </p>
 
       {relations.loading && <p className="muted">Загрузка…</p>}
       {relations.error && <p className="error">{relations.error}</p>}
+
+      {mutual.length > 0 && (
+        <>
+          <label>Взаимные связи</label>
+          {mutual.map((r) => (
+            <div className="row spread" key={r.id} style={{ marginTop: 6 }}>
+              <span>
+                <Link to={`/projects/${projectId}/entities/${otherOf(r)}`}>
+                  {nameOf(otherOf(r))}
+                </Link>{" "}
+                <span className="muted">— {r.relation_type}</span>
+              </span>
+              <button className="ghost danger" onClick={() => remove(r)}>
+                ✕
+              </button>
+            </div>
+          ))}
+        </>
+      )}
 
       {parents.length > 0 && (
         <>
@@ -115,7 +147,9 @@ export function RelationsSection({
           style={{ flex: 1 }}
           onChange={(e) => setChildId(e.target.value ? Number(e.target.value) : "")}
         >
-          <option value="">— добавить дочернюю сущность —</option>
+          <option value="">
+            — {directed ? "добавить дочернюю сущность" : "связать с сущностью"} —
+          </option>
           {entities
             .filter((e) => e.id !== entityId)
             .map((e) => (
@@ -128,7 +162,7 @@ export function RelationsSection({
           value={type}
           list="relation-presets"
           style={{ width: 190 }}
-          onChange={(e) => setType(e.target.value)}
+          onChange={(e) => pickType(e.target.value)}
         />
         <datalist id="relation-presets">
           {PRESETS.map((p) => (
@@ -139,6 +173,10 @@ export function RelationsSection({
           Связать
         </button>
       </div>
+      <label className="check" style={{ marginTop: 8 }}>
+        <input type="checkbox" checked={directed} onChange={(e) => setDirected(e.target.checked)} />
+        родитель → дочерняя (иерархия)
+      </label>
       {err && <div className="error">{err}</div>}
     </section>
   );

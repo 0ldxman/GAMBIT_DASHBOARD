@@ -24,12 +24,12 @@ const SPECIAL: { label: string; snippet: string; hint: string }[] = [
   {
     label: "родители",
     snippet: '{{ родители | строки("{название} ({тип})") }}',
-    hint: "во что входит",
+    hint: "во что входит (иерархия)",
   },
   {
     label: "дети",
     snippet: '{{ дети | строки("{название}") }}',
-    hint: "что включает",
+    hint: "что включает (иерархия)",
   },
 ];
 
@@ -86,6 +86,7 @@ export function buildSuggestions({
   if (relationTypes.length > 0) {
     groups.push({
       title: "Связи",
+      // И взаимные («союзник»), и иерархические: по типу видны и те и другие.
       items: relationTypes.map((type) => ({
         label: type,
         // Тип связи может быть с пробелом («член организации») — берём по ключу.

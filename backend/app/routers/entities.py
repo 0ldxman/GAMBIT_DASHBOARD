@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
+from sqlalchemy import and_
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,7 @@ from app.schemas import MemberOut
 from app.schemas import MemberUpdate
 from app.schemas import RelationCreate
 from app.schemas import RelationOut
+from app.schemas import RelationUpdate
 from app.schemas import RenderedPage
 from app.schemas import TemplatePagesResponse
 from app.security import require_master
@@ -339,7 +341,11 @@ async def list_relations(
 async def add_relation(
     project_id: int, entity_id: int, body: RelationCreate, db: AsyncSession = Depends(get_db)
 ) -> EntityRelation:
-    """Добавить дочернюю сущность: entity_id — родитель, child_id — потомок."""
+    """Связать сущности: entity_id — первая сторона, child_id — вторая.
+
+    Иерархия (`directed`) делает entity_id родителем; взаимная связь порядок
+    сторон не значит ничем, кроме порядка записи.
+    """
     await get_entity_or_404(project_id, entity_id, db)
     await get_entity_or_404(project_id, body.child_id, db)  # и что она из этого же проекта
     if body.child_id == entity_id:
@@ -347,13 +353,23 @@ async def add_relation(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Сущность не может быть связана сама с собой",
         )
-    if await _creates_cycle(entity_id, body.child_id, db):
+    if body.directed and await _creates_cycle(entity_id, body.child_id, db):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Связь замкнула бы цикл в иерархии",
         )
+    if not body.directed and await _mirror_exists(entity_id, body.child_id, body.relation_type, db):
+        # У взаимной связи «А—Б» и «Б—А» — одно и то же, а уникальный индекс
+        # смотрит только на точный порядок сторон и такой дубль пропустил бы.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Такая связь уже есть — она взаимная и видна с обеих сторон",
+        )
     relation = EntityRelation(
-        parent_id=entity_id, child_id=body.child_id, relation_type=body.relation_type
+        parent_id=entity_id,
+        child_id=body.child_id,
+        relation_type=body.relation_type,
+        directed=body.directed,
     )
     db.add(relation)
     await db.commit()
@@ -361,8 +377,53 @@ async def add_relation(
     return relation
 
 
+@router.patch("/{entity_id}/relations/{relation_id}", response_model=RelationOut)
+async def update_relation(
+    project_id: int,
+    entity_id: int,
+    relation_id: int,
+    body: RelationUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> EntityRelation:
+    """Сменить тип связи или её род (иерархия ↔ взаимная)."""
+    relation = await _relation_or_404(project_id, entity_id, relation_id, db)
+    data = body.model_dump(exclude_unset=True)
+    directed = data.get("directed", relation.directed)
+    if directed and not relation.directed:
+        if await _creates_cycle(relation.parent_id, relation.child_id, db):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Иерархия замкнула бы цикл",
+            )
+    for key, value in data.items():
+        setattr(relation, key, value)
+    await db.commit()
+    await db.refresh(relation)
+    return relation
+
+
+async def _mirror_exists(
+    parent_id: int, child_id: int, relation_type: str, db: AsyncSession
+) -> bool:
+    """Есть ли уже связь этого типа между теми же сторонами в любом порядке."""
+    result = await db.execute(
+        select(EntityRelation.id).where(
+            EntityRelation.relation_type == relation_type,
+            or_(
+                and_(EntityRelation.parent_id == parent_id, EntityRelation.child_id == child_id),
+                and_(EntityRelation.parent_id == child_id, EntityRelation.child_id == parent_id),
+            ),
+        )
+    )
+    return result.first() is not None
+
+
 async def _creates_cycle(parent_id: int, child_id: int, db: AsyncSession) -> bool:
-    """Станет ли parent потомком child (обход вверх от parent)."""
+    """Станет ли parent потомком child (обход вверх от parent).
+
+    Вверх ведут только иерархические связи: «союзник» — не подчинение, и круг
+    союзов циклом не является.
+    """
     seen: set[int] = set()
     frontier = [parent_id]
     while frontier:
@@ -373,7 +434,9 @@ async def _creates_cycle(parent_id: int, child_id: int, db: AsyncSession) -> boo
             continue
         seen.add(current)
         result = await db.execute(
-            select(EntityRelation.parent_id).where(EntityRelation.child_id == current)
+            select(EntityRelation.parent_id).where(
+                EntityRelation.child_id == current, EntityRelation.directed.is_(True)
+            )
         )
         frontier.extend(row[0] for row in result.all())
     return False
@@ -383,12 +446,20 @@ async def _creates_cycle(parent_id: int, child_id: int, db: AsyncSession) -> boo
 async def delete_relation(
     project_id: int, entity_id: int, relation_id: int, db: AsyncSession = Depends(get_db)
 ) -> None:
+    relation = await _relation_or_404(project_id, entity_id, relation_id, db)
+    await db.delete(relation)
+    await db.commit()
+
+
+async def _relation_or_404(
+    project_id: int, entity_id: int, relation_id: int, db: AsyncSession
+) -> EntityRelation:
+    """Связь, у которой entity_id — одна из сторон (любая: связь взаимная)."""
     await get_entity_or_404(project_id, entity_id, db)
     relation = await db.get(EntityRelation, relation_id)
     if relation is None or entity_id not in (relation.parent_id, relation.child_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Связь не найдена")
-    await db.delete(relation)
-    await db.commit()
+    return relation
 
 
 # ---------- каналы сущности ----------

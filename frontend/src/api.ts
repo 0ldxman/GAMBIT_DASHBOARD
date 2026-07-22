@@ -223,8 +223,14 @@ export const api = {
   addRelation: (
     pid: number,
     eid: number,
-    data: { child_id: number; relation_type: string },
+    data: { child_id: number; relation_type: string; directed: boolean },
   ) => request<Relation>("POST", `/projects/${pid}/entities/${eid}/relations`, data),
+  updateRelation: (
+    pid: number,
+    eid: number,
+    rid: number,
+    data: { relation_type?: string; directed?: boolean },
+  ) => request<Relation>("PATCH", `/projects/${pid}/entities/${eid}/relations/${rid}`, data),
   deleteRelation: (pid: number, eid: number, rid: number) =>
     request<void>("DELETE", `/projects/${pid}/entities/${eid}/relations/${rid}`),
 

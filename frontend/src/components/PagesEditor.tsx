@@ -41,6 +41,7 @@ export function PagesEditor({
   hint,
   insertRef,
   suggestions = [],
+  scope = "pages",
 }: {
   pages: Page[];
   onChange: (pages: Page[]) => void;
@@ -51,6 +52,8 @@ export function PagesEditor({
   insertRef?: MutableRefObject<((text: string) => void) | null>;
   /** Что предлагать по правой кнопке: атрибуты, формулы, особые переменные. */
   suggestions?: SuggestionGroup[];
+  /** Под каким именем помнить высоту полей: у типа и у сущности она своя. */
+  scope?: string;
 }) {
   // Последнее место, где стоял курсор. Пока страницу не трогали — конец первой.
   const caret = useRef<Caret>({ index: 0, start: -1, end: -1 });
@@ -155,6 +158,9 @@ export function PagesEditor({
             <CodeArea
               value={page.text}
               suggestions={suggestions}
+              // Высота одна на все страницы экрана: растянув одну, мастер
+              // получает такими же и остальные — иначе подгонять каждую.
+              storageKey={`code:${scope}`}
               onChange={(text) => patch(i, { text })}
               onSelectionChange={(start, end) => {
                 caret.current = { index: i, start, end };

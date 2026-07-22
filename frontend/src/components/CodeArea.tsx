@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
+import { useLocalNumber } from "../hooks";
 
 /** Что можно вставить в шаблон правой кнопкой. */
 export interface Suggestion {
@@ -48,10 +49,11 @@ function tokenize(text: string): Token[] {
 export function CodeArea({
   value,
   onChange,
-  minHeight = 200,
+  minHeight = 260,
   suggestions = [],
   onSelectionChange,
   areaRef,
+  storageKey = "",
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -61,11 +63,19 @@ export function CodeArea({
   /** Сообщить наружу позицию каретки — по ней вставляют из других мест. */
   onSelectionChange?: (start: number, end: number) => void;
   areaRef?: MutableRefObject<HTMLTextAreaElement | null>;
+  /**
+   * Где запомнить высоту, растянутую мышкой. Описания у всех разной длины, и
+   * подгонять поле каждый раз заново — то ещё удовольствие. Пусто — не помнить.
+   */
+  storageKey?: string;
 }) {
   const localRef = useRef<HTMLTextAreaElement | null>(null);
   const highlightRef = useRef<HTMLPreElement | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; at: number } | null>(null);
   const [query, setQuery] = useState("");
+  const [height, setHeight] = useLocalNumber(storageKey, minHeight);
+  // Последняя учтённая высота: без неё наблюдатель ловил бы собственный setState.
+  const known = useRef(height);
 
   const setRef = (node: HTMLTextAreaElement | null) => {
     localRef.current = node;
@@ -86,6 +96,21 @@ export function CodeArea({
       window.removeEventListener("keydown", onKey);
     };
   }, [menu]);
+
+  // Поле тянут за уголок — запоминаем результат, чтобы он пережил перезаход.
+  useEffect(() => {
+    const area = localRef.current;
+    if (!area || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const next = Math.round(area.getBoundingClientRect().height);
+      if (next > 0 && Math.abs(next - known.current) > 2) {
+        known.current = next;
+        setHeight(next);
+      }
+    });
+    observer.observe(area);
+    return () => observer.disconnect();
+  }, [setHeight]);
 
   function insert(snippet: string, at: number) {
     const next = `${value.slice(0, at)}${snippet}${value.slice(at)}`;
@@ -112,7 +137,7 @@ export function CodeArea({
     .filter((group) => group.items.length > 0);
 
   return (
-    <div className="code-wrap" style={{ minHeight }}>
+    <div className="code-wrap" style={{ minHeight: height }}>
       <pre className="code-hl" ref={highlightRef} aria-hidden>
         {tokenize(value).map((token, i) =>
           token.kind === "text" ? (
@@ -131,7 +156,7 @@ export function CodeArea({
         className="code-input"
         value={value}
         spellCheck={false}
-        style={{ minHeight }}
+        style={{ height, minHeight: 90 }}
         onChange={(e) => onChange(e.target.value)}
         onScroll={(e) => {
           const pre = highlightRef.current;

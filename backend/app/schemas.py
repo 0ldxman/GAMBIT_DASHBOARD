@@ -233,12 +233,24 @@ class RelationOut(ORMModel):
     parent_id: int
     child_id: int
     relation_type: str
+    directed: bool
 
 
 class RelationCreate(BaseModel):
-    # Направление: parent → child. Указывается вторая сторона и её роль в связи.
+    """Связь со второй стороной.
+
+    `directed=False` (по умолчанию) — стороны равны: «союзник», «война».
+    `directed=True` — иерархия parent → child: «состав», «вассал».
+    """
+
     child_id: int
-    relation_type: str = "состав"
+    relation_type: str = "союзник"
+    directed: bool = False
+
+
+class RelationUpdate(BaseModel):
+    relation_type: Optional[str] = None
+    directed: Optional[bool] = None
 
 
 # ---------- каналы сущности ----------

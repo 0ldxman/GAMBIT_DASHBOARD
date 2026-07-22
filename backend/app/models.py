@@ -228,6 +228,15 @@ class EntityRelation(Base):
 
     Отдельная таблица вместо parent_id: сущность может входить сразу в несколько
     родителей (страна — и в блок, и в организацию), а тип связи описывает её смысл.
+
+    Связи бывают двух родов, и это задаёт `directed`:
+
+    * иерархическая (`directed=True`) — «состав», «вассал»: стороны неравны,
+      parent_id — старший. Такие связи дают `{{ родители }}` и `{{ дети }}`,
+      и только по ним проверяются циклы.
+    * взаимная (`directed=False`, по умолчанию) — «союзник», «война»: стороны
+      равны, parent/child — просто порядок записи. В шаблоне они видны обеим
+      сторонам через `{{ связи.союзник }}`.
     """
 
     __tablename__ = "entity_relation"
@@ -240,6 +249,8 @@ class EntityRelation(Base):
     child_id: Mapped[int] = mapped_column(ForeignKey("entity.id", ondelete="CASCADE"))
     # Напр.: "состав", "член организации", "вассал", "подразделение".
     relation_type: Mapped[str] = mapped_column(String(120), default="состав")
+    # Иерархия (родитель → дочерняя) или равные стороны.
+    directed: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     parent: Mapped[Entity] = relationship(back_populates="relations_out", foreign_keys=[parent_id])

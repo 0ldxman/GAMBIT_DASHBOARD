@@ -29,6 +29,38 @@ export function useLocalFlag(key: string, initial: boolean) {
 }
 
 /**
+ * Число интерфейса, переживающее перезагрузку: высота растянутого поля.
+ *
+ * Пустой ключ выключает запоминание — значение живёт только в памяти.
+ */
+export function useLocalNumber(key: string, initial: number) {
+  const [value, setValue] = useState(() => {
+    if (!key) return initial;
+    try {
+      const saved = Number(localStorage.getItem(key));
+      return Number.isFinite(saved) && saved > 0 ? saved : initial;
+    } catch {
+      return initial;
+    }
+  });
+
+  const set = useCallback(
+    (next: number) => {
+      setValue(next);
+      if (!key) return;
+      try {
+        localStorage.setItem(key, String(Math.round(next)));
+      } catch {
+        /* пусто */
+      }
+    },
+    [key],
+  );
+
+  return [value, set] as const;
+}
+
+/**
  * Что изменилось с момента загрузки формы.
  *
  * `current` — то, что в форме сейчас, `saved` — то, что пришло с сервера.

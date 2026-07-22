@@ -12,6 +12,13 @@ const WIDTH = 900;
 const HEIGHT = 560;
 
 /** Цвет типа связи: стабильный, выводится из самой строки. */
+/** id маркера-стрелки: тип связи в id не подставить, там кириллица и пробелы. */
+function arrowId(type: string): string {
+  let hash = 0;
+  for (const ch of type) hash = (hash * 31 + ch.charCodeAt(0)) % 100000;
+  return `rel-arrow-${hash}`;
+}
+
 export function typeColor(type: string): string {
   let hash = 0;
   for (const ch of type) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
@@ -114,6 +121,12 @@ export function RelationGraph({
   // Раскладка пересчиталась (изменились данные) — принимаем её.
   useEffect(() => setNodes(initial), [initial]);
 
+  // Типы иерархических связей — по одному наконечнику стрелки на каждый.
+  const arrowTypes = useMemo(
+    () => [...new Set(relations.filter((r) => r.directed).map((r) => r.relation_type))],
+    [relations],
+  );
+
   const dragging = useRef<{ id: number; moved: boolean } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
@@ -151,6 +164,25 @@ export function RelationGraph({
         dragging.current = null;
       }}
     >
+      {/* Наконечник стрелки на каждый тип связи: маркер не наследует цвет линии
+          в старых браузерах, поэтому цвет задаётся прямо в нём. */}
+      <defs>
+        {arrowTypes.map((type) => (
+          <marker
+            key={type}
+            id={arrowId(type)}
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={typeColor(type)} />
+          </marker>
+        ))}
+      </defs>
+
       {relations.map((relation) => {
         const from = byId.get(relation.parent_id);
         const to = byId.get(relation.child_id);
@@ -158,19 +190,27 @@ export function RelationGraph({
         const active =
           highlight != null &&
           (relation.parent_id === highlight || relation.child_id === highlight);
+        // Стрелка упирается в край узла, иначе наконечник прячется под кружком.
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const dist = Math.max(Math.hypot(dx, dy), 0.01);
+        const gap = relation.directed ? 12 : 0;
         return (
           <line
             key={relation.id}
             x1={from.x}
             y1={from.y}
-            x2={to.x}
-            y2={to.y}
+            x2={to.x - (dx / dist) * gap}
+            y2={to.y - (dy / dist) * gap}
             stroke={typeColor(relation.relation_type)}
             strokeWidth={active ? 2.5 : 1.2}
             opacity={highlight == null || active ? 0.85 : 0.15}
+            markerEnd={
+              relation.directed ? `url(#${arrowId(relation.relation_type)})` : undefined
+            }
           >
             <title>
-              {from.label} → {to.label}: {relation.relation_type}
+              {from.label} {relation.directed ? "→" : "↔"} {to.label}: {relation.relation_type}
             </title>
           </line>
         );

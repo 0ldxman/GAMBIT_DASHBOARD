@@ -12,6 +12,7 @@ import { EntityCard } from "../components/EntityCard";
 import { Section } from "../components/Section";
 import { Hint } from "../components/Hint";
 import { SaveBar } from "../components/SaveBar";
+import { useWideLayout } from "../components/Layout";
 import { useToast } from "../components/Feedback";
 import type {
   ComputedField,
@@ -131,6 +132,7 @@ export function EntityPage() {
   );
   const navigate = useNavigate();
   const toast = useToast();
+  useWideLayout();
   const pingCount = pings.data?.find((p) => p.entity_id === eid)?.unread ?? 0;
 
   const [tab, setTab] = useState<Tab>("data");
@@ -360,7 +362,10 @@ export function EntityPage() {
                   <code>{"{{ ВС.людские_ресурсы }}"}</code>. Значение разбирается как JSON, если
                   получается: <code>1200</code> станет числом. Кнопка <code>☰</code> превращает
                   атрибут в список — тогда он правится по строке на элемент (объект списка
-                  пишется одной строкой JSON).
+                  пишется одной строкой JSON). Переключатель <b>группы</b> делит атрибуты по
+                  первому, второму или третьему уровню пути: при глубине 2{" "}
+                  <code>ЭКН.энергия.запас</code> и <code>ЭКН.энергия.расход</code> лягут в
+                  «ЭКН» → «энергия».
                 </Hint>
                 <AttributesEditor
                   initial={entity.data?.attributes ?? {}}
@@ -427,6 +432,7 @@ export function EntityPage() {
                 <PagesEditor
                   pages={customPages}
                   onChange={setCustomPages}
+                  scope="entity"
                   rendered={preview?.pages}
                   limit={preview?.limit ?? 2000}
                   suggestions={buildSuggestions({

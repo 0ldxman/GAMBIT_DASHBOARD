@@ -96,12 +96,16 @@ export interface Member {
   player_avatar_url: string;
 }
 
-/** Типизированная связь сущностей: parent → child. */
+/**
+ * Связь сущностей. `directed` — иерархия parent → child («состав», «вассал»);
+ * иначе стороны равны («союзник», «война»), и порядок ничего не значит.
+ */
 export interface Relation {
   id: number;
   parent_id: number;
   child_id: number;
   relation_type: string;
+  directed: boolean;
 }
 
 /** Привязка Discord-канала к сущности. */

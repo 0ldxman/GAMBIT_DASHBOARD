@@ -96,8 +96,10 @@ label { display: block; font-size: var(--fs-cap); color: var(--muted); margin: 1
 @media (max-width: 640px) { .fields.two { grid-template-columns: 1fr; } }
 
 .container { max-width: 1100px; margin: 0 auto; padding: var(--s5); }
-/* Редакторы двухколоночные: 1100px душит и форму, и предпросмотр. */
-.container.wide { max-width: 1500px; }
+/* Редакторы двухколоночные: 1100px душит и форму, и предпросмотр. Ограничение
+   снимается почти полностью — на широком мониторе шаблон описания перестаёт
+   переноситься по слову, а предпросмотр остаётся рядом, а не под формой. */
+.container.wide { max-width: min(1800px, 100%); }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--s3) var(--s5); border-bottom: 1px solid var(--border); background: var(--bg-elev);
@@ -437,6 +439,8 @@ td.actions { text-align: right; white-space: nowrap; }
   font-size: var(--fs-cap); font-weight: 600; text-align: left;
 }
 .attr-group-head:hover { background: #262c3a; }
+/* Вложенная группа (ЭКН → энергия): шапка тише, иначе уровни неразличимы. */
+.attr-group .attr-group > .attr-group-head { background: var(--bg-elev); font-weight: 500; }
 .attr-group-body { padding: var(--s2) var(--s3) var(--s3); display: flex; flex-direction: column; gap: 6px; }
 .attr-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.2fr) auto; gap: var(--s2); align-items: center; }
 .attr-key { color: var(--muted); font-size: var(--fs-cap); font-family: var(--mono); }
