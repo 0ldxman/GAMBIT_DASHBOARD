@@ -82,14 +82,28 @@ interface GroupNode {
   count: number;
 }
 
+/** Глубина «сколько есть»: путей длиннее вряд ли кто-то заведёт. */
+const ALL_LEVELS = 9;
+
+/** Варианты глубины для переключателя: обычно нужна вся вложенность. */
+const DEPTH_OPTIONS: { label: string; value: number }[] = [
+  { label: "1", value: 1 },
+  { label: "2", value: 2 },
+  { label: "всё", value: ALL_LEVELS },
+];
+
 /**
  * Разложить строки по уровням пути до глубины `depth`.
  *
- * `ЭКН.энергия.запас` при глубине 2 попадает в «ЭКН» → «энергия», при глубине 1
- * — просто в «ЭКН». Строка, которая на этом уровне заканчивается, остаётся
- * собственной строкой группы и в подгруппу не уезжает.
+ * `РЕС.пища.запас` при полной вложенности попадает в «РЕС» → «пища», при
+ * глубине 1 — в «РЕС» строкой «пища.запас». Строка, которая на этом уровне
+ * заканчивается, остаётся собственной строкой группы и никуда не уезжает.
+ *
+ * Группа из одной строки не заводится: коробка вокруг единственного поля
+ * («ВС» → «танки») только добавляет рамок, поэтому такое поле остаётся строкой
+ * родителя с остатком пути в имени.
  */
-function buildGroups(
+export function buildGroups(
   items: Placed[],
   depth: number,
   level = 0,
@@ -107,16 +121,22 @@ function buildGroups(
     if (bucket) bucket.push(item);
     else buckets.set(prefix, [item]);
   }
-  const groups = [...buckets.entries()].map(([prefix, bucket]) => {
+
+  const groups: GroupNode[] = [];
+  for (const [prefix, bucket] of buckets) {
+    if (bucket.length < 2) {
+      rows.push(...bucket);
+      continue;
+    }
     const inner = buildGroups(bucket, depth, level + 1);
-    return {
+    groups.push({
       prefix,
       name: prefix.slice(prefix.lastIndexOf(".") + 1),
       rows: inner.rows,
       groups: inner.groups,
       count: bucket.length,
-    };
-  });
+    });
+  }
   return { rows, groups };
 }
 
@@ -191,9 +211,9 @@ export function AttributesEditor({
   const [jsonText, setJsonText] = useState(() => JSON.stringify(initial, null, 2));
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  // На сколько уровней пути делить группы: «ЭКН.энергия.запас» и
-  // «РЕС.минералы.запас» читаются как дерево только при глубине 2.
-  const [depth, setDepth] = useLocalNumber(`attrs:${scope}:depth`, 1);
+  // На сколько уровней пути делить группы. По умолчанию на все: «РЕС.пища.запас»
+  // и «РЕС.пища.расход» читаются деревом, а не списком одинаковых строк.
+  const [depth, setDepth] = useLocalNumber(`attrs:${scope}:depth`, ALL_LEVELS);
   // Черновой текст списков по индексу строки. Без него перевод строки в конце
   // съедался бы пересборкой значения из JSON прямо во время набора.
   const [drafts, setDrafts] = useState<Record<number, string>>({});
@@ -383,13 +403,13 @@ export function AttributesEditor({
               группы
             </span>
             <div className="subtabs">
-              {[1, 2, 3].map((level) => (
+              {DEPTH_OPTIONS.map((option) => (
                 <button
-                  key={level}
-                  className={depth === level ? "active" : ""}
-                  onClick={() => setDepth(level)}
+                  key={option.value}
+                  className={depth === option.value ? "active" : ""}
+                  onClick={() => setDepth(option.value)}
                 >
-                  {level}
+                  {option.label}
                 </button>
               ))}
             </div>
