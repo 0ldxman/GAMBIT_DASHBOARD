@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { JsonEditor } from "../components/JsonEditor";
 import { PagesEditor, PagesPreview } from "../components/PagesEditor";
-import type { EntityType, TemplatePages } from "../types";
+import { ComputedEditor } from "../components/ComputedEditor";
+import type { ComputedField, EntityType, TemplatePages } from "../types";
 
 const SAMPLE_HINT = `{
   "столица": "Москва",
@@ -23,6 +24,17 @@ const DEFAULT_TEMPLATE = `**{{ label }}**
 Личный состав: {{ ВС.людские_ресурсы }}
 Танки: {{ ВС.танки }}`;
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Пути атрибутов для подсказки в формулах: до листа, списки — целиком. */
+function attrPaths(value: unknown, prefix = ""): string[] {
+  if (!isPlainObject(value)) return prefix ? [prefix] : [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    attrPaths(item, prefix ? `${prefix}.${key}` : key),
+  );
+}
+
 /** Полноценная страница создания и редактирования типа сущности. */
 export function EntityTypeEditorPage() {
   const { projectId, typeId } = useParams();
@@ -36,11 +48,22 @@ export function EntityTypeEditorPage() {
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
   const [pages, setPages] = useState<string[]>([DEFAULT_TEMPLATE]);
+  const [computed, setComputed] = useState<ComputedField[]>([]);
+  // Через него редактор формул вставляет {{ выч.путь }} в страницу описания.
+  const insertRef = useRef<((text: string) => void) | null>(null);
   // Структура атрибутов: и заготовка для новых сущностей, и данные предпросмотра.
   const [sample, setSample] = useState(SAMPLE_HINT);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TemplatePages | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Разобранная структура атрибутов — из неё берутся подсказки путей для формул.
+  const parsedSample = useMemo(() => {
+    try {
+      return sample.trim() ? JSON.parse(sample) : {};
+    } catch {
+      return {};
+    }
+  }, [sample]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -52,6 +75,7 @@ export function EntityTypeEditorPage() {
     // У типов, созданных до появления страниц, описание лежит одной строкой.
     const saved = existing.description_pages ?? [];
     setPages(saved.length > 0 ? saved : [existing.attributes_template || ""]);
+    setComputed(existing.computed ?? []);
     // У типов, созданных до появления структуры, она пустая — показываем подсказку.
     const schema = existing.attributes_schema ?? {};
     setSample(Object.keys(schema).length > 0 ? JSON.stringify(schema, null, 2) : SAMPLE_HINT);
@@ -64,19 +88,29 @@ export function EntityTypeEditorPage() {
       try {
         attrs = sample.trim() ? JSON.parse(sample) : {};
       } catch {
-        setPreview({ pages: [], limit: 2000, error: "Некорректный JSON атрибутов" });
+        setPreview({
+          pages: [],
+          limit: 2000,
+          error: "Некорректный JSON атрибутов",
+          computed: [],
+        });
         return;
       }
       try {
         setPreview(
-          await api.previewPages(pid, { pages, attributes: attrs, label: label || "Пример" }),
+          await api.previewPages(pid, {
+            pages,
+            attributes: attrs,
+            label: label || "Пример",
+            computed,
+          }),
         );
       } catch (e) {
-        setPreview({ pages: [], limit: 2000, error: String(e) });
+        setPreview({ pages: [], limit: 2000, error: String(e), computed: [] });
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [pages, sample, label, pid]);
+  }, [pages, sample, label, computed, pid]);
 
   async function save() {
     let schema: Record<string, unknown>;
@@ -97,6 +131,7 @@ export function EntityTypeEditorPage() {
       slug,
       description_pages: pages,
       attributes_schema: schema,
+      computed,
     };
     try {
       if (existing) {
@@ -151,6 +186,7 @@ export function EntityTypeEditorPage() {
             <PagesEditor
               pages={pages}
               onChange={setPages}
+              insertRef={insertRef}
               rendered={preview?.pages}
               limit={preview?.limit ?? 2000}
               hint={
@@ -161,6 +197,16 @@ export function EntityTypeEditorPage() {
                   так статы длиннее лимита эмбеда всё-таки помещаются.
                 </p>
               }
+            />
+          </div>
+
+          <div className="section">
+            <ComputedEditor
+              fields={computed}
+              onChange={setComputed}
+              values={preview?.computed}
+              paths={attrPaths(parsedSample)}
+              onInsert={(text) => insertRef.current?.(text)}
             />
           </div>
 

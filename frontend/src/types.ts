@@ -60,6 +60,24 @@ export interface EntityType {
   description_pages: string[];
   /** Заготовка атрибутов: с неё создаётся новая сущность типа. */
   attributes_schema: Record<string, unknown>;
+  /** Формулы от атрибутов: в шаблоне доступны как {{ выч.путь }}. */
+  computed: ComputedField[];
+}
+
+/** Вычисляемое поле типа: путь в дереве формул, подпись и выражение. */
+export interface ComputedField {
+  path: string;
+  label: string;
+  expr: string;
+}
+
+/** Значение формулы на конкретных атрибутах. */
+export interface ComputedValue {
+  path: string;
+  label: string;
+  /** Готовый текст («12 400»); при ошибке пустой. */
+  text: string;
+  error: string | null;
 }
 
 export interface Member {
@@ -233,6 +251,7 @@ export interface TemplatePages {
   pages: RenderedPage[];
   limit: number;
   error: string | null;
+  computed: ComputedValue[];
 }
 
 /** Шаблон верда: заранее отобранный набор полей. */

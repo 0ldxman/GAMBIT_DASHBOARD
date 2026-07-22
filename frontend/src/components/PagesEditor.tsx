@@ -1,5 +1,13 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef } from "react";
+import type { MutableRefObject, ReactNode } from "react";
 import type { RenderedPage } from "../types";
+
+/** Куда вставлять текст: страница и позиция курсора в ней. */
+interface Caret {
+  index: number;
+  start: number;
+  end: number;
+}
 
 /** Редактор страниц описания.
  *
@@ -13,13 +21,35 @@ export function PagesEditor({
   rendered,
   limit,
   hint,
+  insertRef,
 }: {
   pages: string[];
   onChange: (pages: string[]) => void;
   rendered?: RenderedPage[];
   limit: number;
   hint?: ReactNode;
+  /** Сюда кладётся функция вставки текста — ею пользуется редактор формул. */
+  insertRef?: MutableRefObject<((text: string) => void) | null>;
 }) {
+  // Последнее место, где стоял курсор. Пока страницу не трогали — конец первой.
+  const caret = useRef<Caret>({ index: 0, start: -1, end: -1 });
+
+  // Замыкание держит актуальные pages, поэтому переустанавливаем на каждый рендер.
+  useEffect(() => {
+    if (!insertRef) return;
+    insertRef.current = (text: string) => {
+      const { index, start, end } = caret.current;
+      const page = pages[index] ?? pages[0] ?? "";
+      const at = start < 0 ? page.length : start;
+      const to = end < 0 ? page.length : end;
+      const next = `${page.slice(0, at)}${text}${page.slice(to)}`;
+      caret.current = { index, start: at + text.length, end: at + text.length };
+      onChange(
+        pages.length > 0 ? pages.map((p, i) => (i === index ? next : p)) : [next],
+      );
+    };
+  });
+
   function patch(index: number, value: string) {
     onChange(pages.map((p, i) => (i === index ? value : p)));
   }
@@ -85,6 +115,10 @@ export function PagesEditor({
               value={page}
               style={{ minHeight: 200, fontFamily: "ui-monospace, monospace" }}
               onChange={(e) => patch(i, e.target.value)}
+              onSelect={(e) => {
+                const el = e.currentTarget;
+                caret.current = { index: i, start: el.selectionStart, end: el.selectionEnd };
+              }}
             />
             {over && (
               <div className="error" style={{ fontSize: 13 }}>

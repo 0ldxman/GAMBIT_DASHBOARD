@@ -4,6 +4,7 @@ import type {
   Attachment,
   Channel,
   ChannelTree,
+  ComputedField,
   DiscordChannel,
   DiscordGuild,
   DiscordMember,
@@ -164,7 +165,12 @@ export const api = {
   // Предпросмотр всех страниц сразу — с длиной каждой готовой страницы.
   previewPages: (
     pid: number,
-    data: { pages: string[]; attributes: Record<string, unknown>; label: string },
+    data: {
+      pages: string[];
+      attributes: Record<string, unknown>;
+      label: string;
+      computed?: ComputedField[];
+    },
   ) =>
     request<TemplatePages>("POST", `/projects/${pid}/entity-types/preview-pages`, data),
 

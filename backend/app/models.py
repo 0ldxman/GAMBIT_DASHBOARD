@@ -141,6 +141,10 @@ class EntityType(Base):
     # Заготовка атрибутов: структура JSON со значениями по умолчанию. Новая сущность
     # этого типа создаётся с её копией, чтобы мастер не набирал поля заново.
     attributes_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Вычисляемые поля: [{"path": "бюджет.деньги", "label": "Деньги", "expr": "..."}].
+    # Список, а не объект: он хранит порядок вывода и подписи, а дерево по dot-path
+    # собирается при рендере (app/computed.py).
+    computed: Mapped[list[Any]] = mapped_column(JSONB, default=list)
 
     project: Mapped[Project] = relationship(back_populates="entity_types")
     entities: Mapped[list[Entity]] = relationship(back_populates="type")

@@ -5,6 +5,7 @@ import { useAsync } from "../hooks";
 import { PingBell } from "../components/PingBell";
 import { JsonEditor } from "../components/JsonEditor";
 import { PagesEditor, PagesPreview } from "../components/PagesEditor";
+import { ComputedValues } from "../components/ComputedEditor";
 import type { Entity, EntityPingCount, EntityType, TemplatePages } from "../types";
 import { MembersSection } from "./entity/MembersSection";
 import { RelationsSection } from "./entity/RelationsSection";
@@ -208,13 +209,22 @@ export function EntityPage() {
   useEffect(() => {
     const handle = setTimeout(async () => {
       try {
-        setPreview(await api.previewPages(pid, { pages, attributes, label }));
+        setPreview(
+          await api.previewPages(pid, {
+            pages,
+            attributes,
+            label,
+            // Формулы всегда берутся у типа: особое описание меняет вид
+            // карточки, а не правила расчёта.
+            computed: type?.computed ?? [],
+          }),
+        );
       } catch (e) {
-        setPreview({ pages: [], limit: 2000, error: String(e) });
+        setPreview({ pages: [], limit: 2000, error: String(e), computed: [] });
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [pid, pages, attributes, label]);
+  }, [pid, pages, attributes, label, type]);
 
   function switchMode(toJson: boolean) {
     if (toJson) {
@@ -440,6 +450,23 @@ export function EntityPage() {
               </>
             )}
           </section>
+
+          {/* --- формулы типа на атрибутах этой сущности --- */}
+          {(preview?.computed?.length ?? 0) > 0 && (
+            <section className="card">
+              <div className="row spread">
+                <label style={{ margin: 0 }}>Вычисляемые</label>
+                <span className="muted" style={{ fontSize: 13 }}>
+                  из типа «{type?.label}»
+                </span>
+              </div>
+              <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+                Считается по атрибутам выше — прямо сейчас, до сохранения.
+                Правится в типе сущности.
+              </p>
+              <ComputedValues values={preview?.computed} />
+            </section>
+          )}
 
           {/* --- игроки, связи и каналы: сохраняются сразу, отдельно от полей выше --- */}
           <MembersSection projectId={pid} entityId={eid} onChanged={() => entity.reload()} />

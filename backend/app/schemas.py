@@ -114,6 +114,24 @@ class ChannelOut(ORMModel):
 
 
 # ---------- entity type ----------
+class ComputedFieldIn(BaseModel):
+    """Вычисляемое поле: путь в дереве формул, подпись и выражение."""
+
+    path: str  # dot-path, напр. "бюджет.ресурсы.минералы"
+    label: str = ""
+    expr: str
+
+
+class ComputedValueOut(BaseModel):
+    """Значение формулы для конкретной сущности."""
+
+    path: str
+    label: str
+    # Готовый к показу текст («12 400»); ошибка — вместо него.
+    text: str = ""
+    error: Optional[str] = None
+
+
 class EntityTypeBase(BaseModel):
     slug: str
     label: str
@@ -123,6 +141,8 @@ class EntityTypeBase(BaseModel):
     description_pages: list[str] = Field(default_factory=list)
     # Структура атрибутов по умолчанию — с неё начинается новая сущность типа.
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
+    # Формулы от атрибутов, доступные в шаблоне как {{ выч.путь }}.
+    computed: list[ComputedFieldIn] = Field(default_factory=list)
 
 
 class EntityTypeCreate(EntityTypeBase):
@@ -135,6 +155,7 @@ class EntityTypeUpdate(BaseModel):
     attributes_template: Optional[str] = None
     description_pages: Optional[list[str]] = None
     attributes_schema: Optional[dict[str, Any]] = None
+    computed: Optional[list[ComputedFieldIn]] = None
 
 
 class EntityTypeOut(ORMModel):
@@ -145,6 +166,7 @@ class EntityTypeOut(ORMModel):
     attributes_template: str
     description_pages: list[str] = Field(default_factory=list)
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
+    computed: list[ComputedFieldIn] = Field(default_factory=list)
 
 
 # ---------- entity ----------
@@ -341,6 +363,8 @@ class TemplatePagesRequest(BaseModel):
     pages: list[str] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
     label: str = ""
+    # Формулы типа: считаются на этих же атрибутах и подставляются в страницы.
+    computed: list[ComputedFieldIn] = Field(default_factory=list)
 
 
 class RenderedPage(BaseModel):
@@ -354,6 +378,7 @@ class TemplatePagesResponse(BaseModel):
     pages: list[RenderedPage] = Field(default_factory=list)
     limit: int
     error: Optional[str] = None
+    computed: list[ComputedValueOut] = Field(default_factory=list)
 
 
 # ---------- post (верд) ----------

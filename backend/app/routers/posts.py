@@ -11,10 +11,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attributes import apply_attribute_patch
+from app.computed import compute
+from app.computed import template_extra
 from app.database import get_db
 from app.expressions import ExpressionError
 from app.expressions import evaluate
 from app.models import Entity
+from app.models import EntityType
 from app.models import PostStatus
 from app.models import Post
 from app.routers.projects import get_project_or_404
@@ -64,6 +67,9 @@ async def apply_entity_edits(project_id: int, edits: list, db: AsyncSession) -> 
                 detail=f"Сущность {entity_id} не принадлежит проекту",
             )
 
+        entity_type = (
+            await db.get(EntityType, entity.type_id) if entity.type_id is not None else None
+        )
         current = dict(entity.attributes or {})
         for op in ops:
             if not isinstance(op, dict):
@@ -75,8 +81,12 @@ async def apply_entity_edits(project_id: int, edits: list, db: AsyncSession) -> 
             if mode == "delete":
                 current = apply_attribute_patch(current, {path: None})
             elif mode == "expr":
+                # Формулы типа доступны как «выч.бюджет.итого». Пересчитываем на
+                # каждой операции: предыдущие уже поменяли атрибуты.
+                tree, _ = compute(entity_type.computed if entity_type else [], current)
+                context = {**current, **template_extra(tree, current)}
                 try:
-                    value = evaluate(str(op.get("value") or ""), current)
+                    value = evaluate(str(op.get("value") or ""), context)
                 except ExpressionError as exc:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

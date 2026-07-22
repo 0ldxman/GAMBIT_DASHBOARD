@@ -5,9 +5,13 @@ from fastapi import status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.computed import compute
+from app.computed import template_extra
+from app.computed import validate as validate_computed
 from app.database import get_db
 from app.models import EntityType
 from app.routers.projects import get_project_or_404
+from app.schemas import ComputedValueOut
 from app.schemas import EntityTypeCreate
 from app.schemas import EntityTypeOut
 from app.schemas import EntityTypeUpdate
@@ -16,6 +20,7 @@ from app.schemas import TemplatePagesRequest
 from app.schemas import TemplatePagesResponse
 from app.security import require_master
 from app.templating import PAGE_SOFT_LIMIT
+from app.templating import format_number
 from app.templating import render_pages
 from app.templating import validate_template
 
@@ -34,7 +39,14 @@ async def get_type_or_404(project_id: int, type_id: int, db: AsyncSession) -> En
 
 
 def _prepare(data: dict) -> dict:
-    """Проверить шаблоны страниц и синхронизировать первую с attributes_template."""
+    """Проверить шаблоны и формулы, синхронизировать первую страницу с attributes_template."""
+    if data.get("computed") is not None:
+        err = validate_computed(data["computed"])
+        if err:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Вычисляемые поля: {err}",
+            )
     for index, page in enumerate(data.get("description_pages") or [], start=1):
         err = validate_template(page)
         if err:
@@ -80,24 +92,47 @@ async def create_type(
 async def preview_pages(
     project_id: int, body: TemplatePagesRequest
 ) -> TemplatePagesResponse:
-    """Предпросмотр страниц описания с длиной каждой.
+    """Предпросмотр страниц описания и значений формул.
 
     Считаем длину ГОТОВОГО текста: в лимит эмбеда упирается он, а не шаблон —
     одна строка `{{ описание }}` может развернуться в тысячи символов.
+
+    Формулы считаются здесь же, на тех же атрибутах: мастеру нужно видеть и
+    число в поле, и страницу, куда оно подставилось.
     """
+    fields = [field.model_dump() for field in body.computed]
+    tree, values = compute(fields, body.attributes)
+    computed = [
+        ComputedValueOut(
+            path=item.path,
+            label=item.label,
+            text="" if item.value is None else format_number(item.value),
+            error=item.error,
+        )
+        for item in values
+    ]
     for index, page in enumerate(body.pages, start=1):
         err = validate_template(page)
         if err:
             return TemplatePagesResponse(
-                pages=[], limit=PAGE_SOFT_LIMIT, error=f"Страница {index}: {err}"
+                pages=[],
+                limit=PAGE_SOFT_LIMIT,
+                error=f"Страница {index}: {err}",
+                computed=computed,
             )
-    rendered = render_pages(body.pages, body.attributes, label=body.label)
+    rendered = render_pages(
+        body.pages,
+        body.attributes,
+        label=body.label,
+        extra=template_extra(tree, body.attributes),
+    )
     return TemplatePagesResponse(
         pages=[
             RenderedPage(rendered=text, length=len(text), over_limit=len(text) > PAGE_SOFT_LIMIT)
             for text in rendered
         ],
         limit=PAGE_SOFT_LIMIT,
+        computed=computed,
     )
 
 
