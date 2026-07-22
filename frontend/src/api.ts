@@ -169,8 +169,11 @@ export const api = {
     pid: number,
     data: {
       pages: string[];
+      page_colors?: string[];
       attributes: Record<string, unknown>;
       label: string;
+      /** Чья карточка: по ней берутся игроки и связи. Пусто — пример. */
+      entity_id?: number;
       /** Формулы типа. */
       computed?: ComputedField[];
       /** Свои формулы сущности — сервер сольёт их с типовыми. */
@@ -192,6 +195,10 @@ export const api = {
     request<void>("DELETE", `/projects/${pid}/entities/${eid}`),
   renderEntity: (pid: number, eid: number) =>
     request<TemplatePages>("GET", `/projects/${pid}/entities/${eid}/render`),
+
+  // все связи проекта разом — для экрана связей и графа
+  listProjectRelations: (pid: number) =>
+    request<Relation[]>("GET", `/projects/${pid}/entities/-/relations`),
 
   // участники сущности (несколько игроков с ролями)
   listMembers: (pid: number, eid: number) =>

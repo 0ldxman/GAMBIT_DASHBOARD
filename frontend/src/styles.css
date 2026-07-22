@@ -366,6 +366,69 @@ td.actions { text-align: right; white-space: nowrap; }
   display: flex; flex-direction: column; gap: 6px;
 }
 
+/* --- поле шаблона с подсветкой ---
+   Два слоя рисуют один и тот же текст: снизу раскрашенный <pre>, сверху
+   textarea с прозрачными буквами. Метрики обязаны совпадать до пикселя,
+   поэтому шрифт, размер, отступы и перенос строк заданы общим правилом. */
+.code-wrap { position: relative; }
+.code-hl, .code-input {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  tab-size: 2;
+}
+.code-hl {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+  border-color: transparent;
+  pointer-events: none;
+}
+.code-input {
+  position: relative;
+  width: 100%;
+  display: block;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  resize: vertical;
+}
+.code-input::selection { background: rgba(106, 140, 255, 0.35); }
+.tok-var { color: #7ee0b8; }        /* {{ подстановка }} */
+.tok-tag { color: var(--accent); }  /* {% if %} {% for %} */
+.tok-comment { color: var(--muted); font-style: italic; }
+
+/* --- меню вставки по правой кнопке --- */
+.ctx-menu {
+  position: fixed; z-index: 60; width: 320px; max-height: 60vh;
+  display: flex; flex-direction: column;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+}
+.ctx-search { border: none; border-bottom: 1px solid var(--border); border-radius: 0; }
+.ctx-list { overflow-y: auto; padding: var(--s1); }
+.ctx-group {
+  padding: 6px 8px 2px; font-size: var(--fs-micro); text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--muted);
+}
+.ctx-item {
+  display: flex; gap: var(--s2); align-items: baseline; width: 100%;
+  padding: 5px 8px; border: none; border-radius: var(--radius-sm);
+  background: none; color: inherit; text-align: left; font: inherit;
+}
+.ctx-item:hover { background: var(--accent-soft); }
+.ctx-label { font-family: var(--mono); font-size: var(--fs-cap); }
+.ctx-hint { margin-left: auto; color: var(--muted); font-size: var(--fs-micro); white-space: nowrap; }
+.ctx-empty { padding: var(--s3); color: var(--muted); font-size: var(--fs-cap); }
+
 /* --- атрибуты сущности по группам --- */
 .attr-group { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .attr-group-head {
@@ -414,3 +477,11 @@ button.icon.accent { color: var(--accent); border-color: var(--accent); backgrou
 .player-option.selected { background: rgba(88, 101, 242, 0.22); }
 .player-option img { border-radius: 50%; flex-shrink: 0; }
 .player-option-name { flex: 1; }
+
+/* --- граф связей --- */
+.graph { width: 100%; height: auto; display: block; background: var(--bg); touch-action: none; }
+.graph text { fill: var(--text); font-size: 13px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+.graph-node { cursor: pointer; }
+.graph-node:hover circle { fill: var(--accent); }
+/* Точка-метка цвета типа связи в чипах и таблице. */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }

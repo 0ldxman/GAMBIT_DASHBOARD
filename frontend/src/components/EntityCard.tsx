@@ -52,7 +52,8 @@ export function EntityCard({
             <span className="dc-author">Gambit Dashboard</span>
             <span className="dc-bot">BOT</span>
           </div>
-          <div className="dc-embed" style={{ borderLeftColor: "#5865f2" }}>
+          {/* Полоса слева — цвет именно этой страницы, как его увидят в Discord. */}
+          <div className="dc-embed" style={{ borderLeftColor: page.color || "#4f545c" }}>
             <div className="dc-embed-title">{label || "Без названия"}</div>
             <div className="dc-embed-desc">{page.rendered || " "}</div>
           </div>

@@ -238,9 +238,17 @@ async def me_info(interaction: discord.Interaction) -> None:
     # Описание может не влезть в один эмбед — мастер разбивает его на страницы.
     # Показываем по одной, остальные доступны кнопками.
     pages: list[str] = data.get("pages") or [data.get("rendered") or ""]
+    # Цвет страницы задаёт мастер; пусто — оставляем цвет Discord по умолчанию.
+    colors: list[str] = data.get("colors") or []
     embeds: list[discord.Embed] = []
     for index, page in enumerate(pages):
         embed = discord.Embed(title=data["label"], description=page or "—")
+        color = colors[index] if index < len(colors) else ""
+        if color:
+            try:
+                embed.colour = discord.Colour(int(color.lstrip("#"), 16))
+            except ValueError:
+                pass
         if data.get("picture_url"):
             embed.set_thumbnail(url=data["picture_url"])
         if len(pages) > 1:

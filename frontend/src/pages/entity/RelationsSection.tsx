@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import type { Entity, Relation } from "../../types";
 
-const PRESETS = ["состав", "член организации", "вассал", "подразделение", "союзник"];
+const PRESETS = ["состав", "член организации", "вассал", "подразделение", "союзник", "враг"];
 
 /** Связи сущности с другими: и дочерние, и родительские. */
 export function RelationsSection({
@@ -54,10 +54,16 @@ export function RelationsSection({
 
   return (
     <section className="card">
-      <h3 style={{ marginTop: 0 }}>Связи</h3>
-      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+      <div className="row spread">
+        <h3 style={{ marginTop: 0 }}>Связи</h3>
+        <Link to={`/projects/${projectId}?tab=relations`} style={{ fontSize: "var(--fs-cap)" }}>
+          Граф связей проекта →
+        </Link>
+      </div>
+      <p className="hint">
         Иерархия с характером связи. Сущность может входить сразу в несколько родителей —
-        например страна в блоке и в торговой организации.
+        например страна в блоке и в торговой организации. Тип связи виден в описании:{" "}
+        <code>{'{{ связи.союзник | строки("{название}") }}'}</code>.
       </p>
 
       {relations.loading && <p className="muted">Загрузка…</p>}

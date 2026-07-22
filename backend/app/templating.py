@@ -254,6 +254,22 @@ def as_pages(pages: Any, fallback: str = "") -> list[str]:
     return [fallback] if fallback.strip() else []
 
 
+def as_colors(colors: Any, count: int) -> list[str]:
+    """Цвета страниц ровно по числу страниц.
+
+    Список хранится отдельно от страниц и может отстать от них (страницу
+    добавили в другой сессии) — недостающие добираются пустыми, лишние
+    отбрасываются. Пустой цвет = цвет эмбеда по умолчанию.
+    """
+    values = [str(c or "").strip() for c in colors] if isinstance(colors, list) else []
+    values = [c if _COLOR_RE.fullmatch(c) else "" for c in values]
+    return (values + [""] * count)[:count]
+
+
+# Только #rrggbb: этот формат понимают и Discord, и <input type="color">.
+_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")
+
+
 def render_pages(
     pages: list[str],
     attributes: dict[str, Any] | None,

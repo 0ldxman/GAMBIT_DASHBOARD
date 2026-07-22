@@ -138,6 +138,10 @@ class EntityType(Base):
     # Страницы описания: список Jinja2-шаблонов. У эмбеда есть предел длины,
     # поэтому длинные статы разбиваются на страницы — бот листает их кнопками.
     description_pages: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Цвет полосы эмбеда для каждой страницы («#5865F2», пусто — без цвета).
+    # Параллельный список, а не поле внутри страницы: страницы уже хранятся
+    # строками, и менять их формат ради цвета пришлось бы во всех старых записях.
+    page_colors: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     # Заготовка атрибутов: структура JSON со значениями по умолчанию. Новая сущность
     # этого типа создаётся с её копией, чтобы мастер не набирал поля заново.
     attributes_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
@@ -169,6 +173,7 @@ class Entity(Base):
     # Особое описание: страницы этой сущности вместо страниц её типа.
     use_custom_description: Mapped[bool] = mapped_column(default=False)
     description_pages: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    page_colors: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     # Собственные формулы сущности — тот же формат, что у типа. В отличие от
     # описания они не замещают типовые, а ДОПОЛНЯЮТ их: совпадение путей
     # переопределяет одну формулу, остальные продолжают работать (app/computed.py).

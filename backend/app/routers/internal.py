@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import get_db
-from app.descriptions import render_entity_pages
+from app.descriptions import render_entity_card
 from app.models import ChannelSetting
 from app.models import ChannelWebhook
 from app.models import Entity
@@ -154,12 +154,13 @@ async def me_info(
     entity = result.scalars().first()
     if entity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="За вами не закреплена сущность")
-    pages = await render_entity_pages(entity, db)
+    pages, colors = await render_entity_card(entity, db)
     return MeInfoOut(
         entity_id=entity.id,
         label=entity.label,
         rendered=pages[0] if pages else "",
         pages=pages,
+        colors=colors,
         picture_url=public_url(entity.picture),
     )
 

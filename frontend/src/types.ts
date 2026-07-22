@@ -58,6 +58,8 @@ export interface EntityType {
   attributes_template: string;
   /** Страницы описания: каждая уходит в Discord отдельным эмбедом. */
   description_pages: string[];
+  /** Цвет полосы эмбеда для каждой страницы, тем же порядком. */
+  page_colors: string[];
   /** Заготовка атрибутов: с неё создаётся новая сущность типа. */
   attributes_schema: Record<string, unknown>;
   /** Формулы от атрибутов: в шаблоне доступны как {{ выч.путь }}. */
@@ -188,6 +190,7 @@ export interface Entity {
   /** Особое описание замещает страницы типа. */
   use_custom_description: boolean;
   description_pages: string[];
+  page_colors: string[];
   /** Свои формулы: дополняют формулы типа, совпадение путей — переопределяет. */
   computed: ComputedField[];
   members: Member[];
@@ -266,6 +269,8 @@ export interface RenderedPage {
   rendered: string;
   length: number;
   over_limit: boolean;
+  /** Цвет полосы эмбеда; пусто — цвет Discord по умолчанию. */
+  color: string;
 }
 
 export interface TemplatePages {

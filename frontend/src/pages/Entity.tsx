@@ -4,7 +4,9 @@ import { api } from "../api";
 import { useAsync, useChanges } from "../hooks";
 import { PingBell } from "../components/PingBell";
 import { AttributesEditor, attrPaths } from "../components/AttributesEditor";
-import { PagesEditor } from "../components/PagesEditor";
+import { PagesEditor, pageColors, pageTexts, toPages } from "../components/PagesEditor";
+import type { Page } from "../components/PagesEditor";
+import { buildSuggestions } from "../components/suggestions";
 import { ComputedEditor } from "../components/ComputedEditor";
 import { EntityCard } from "../components/EntityCard";
 import { Section } from "../components/Section";
@@ -17,6 +19,7 @@ import type {
   EntityPingCount,
   EntityType,
   Project,
+  Relation,
   TemplatePages,
 } from "../types";
 import { MembersSection } from "./entity/MembersSection";
@@ -117,6 +120,11 @@ export function EntityPage() {
   const types = useAsync<EntityType[]>(() => api.listTypes(pid), [pid]);
   // Список сущностей проекта нужен для выбора второй стороны связи.
   const allEntities = useAsync<Entity[]>(() => api.listEntities(pid), [pid]);
+  // Типы связей этой сущности — из них собираются пункты меню вставки.
+  const relations = useAsync<Relation[]>(
+    () => api.listRelations(pid, eid).catch(() => []),
+    [pid, eid],
+  );
   const pings = useAsync<EntityPingCount[]>(
     () => api.entityPingCounts(pid).catch(() => []),
     [pid],
@@ -136,7 +144,7 @@ export function EntityPage() {
   const [computed, setComputed] = useState<ComputedField[]>([]);
   const [preview, setPreview] = useState<TemplatePages | null>(null);
   const [custom, setCustom] = useState(false);
-  const [customPages, setCustomPages] = useState<string[]>([]);
+  const [customPages, setCustomPages] = useState<Page[]>([]);
   const [saving, setSaving] = useState(false);
 
   function fillFrom(data: Entity) {
@@ -146,7 +154,7 @@ export function EntityPage() {
     setAttributes(data.attributes);
     setComputed(data.computed ?? []);
     setCustom(data.use_custom_description);
-    setCustomPages(data.description_pages ?? []);
+    setCustomPages(toPages(data.description_pages ?? [], data.page_colors ?? []));
     setAttrVersion((v) => v + 1);
   }
 
@@ -159,13 +167,18 @@ export function EntityPage() {
     () => types.data?.find((t) => t.id === typeId) ?? null,
     [types.data, typeId],
   );
+  const relationTypes = useMemo(
+    () => [...new Set((relations.data ?? []).map((r) => r.relation_type))],
+    [relations.data],
+  );
 
   // Что реально увидят в Discord: особое описание замещает страницы типа.
-  const pages = useMemo(() => {
+  const pages = useMemo<Page[]>(() => {
     if (custom) return customPages;
     if (!type) return [];
     const fromType = type.description_pages ?? [];
-    return fromType.length > 0 ? fromType : [type.attributes_template || ""];
+    const texts = fromType.length > 0 ? fromType : [type.attributes_template || ""];
+    return toPages(texts, type.page_colors ?? []);
   }, [custom, customPages, type]);
 
   // Живой предпросмотр: страницы и значения формул на текущих, ещё не
@@ -175,9 +188,12 @@ export function EntityPage() {
       try {
         setPreview(
           await api.previewPages(pid, {
-            pages,
+            pages: pageTexts(pages),
+            page_colors: pageColors(pages),
             attributes,
             label,
+            // Игроки и связи берутся у настоящей сущности, а не с примера.
+            entity_id: eid,
             computed: type?.computed ?? [],
             computed_own: computed,
           }),
@@ -187,7 +203,7 @@ export function EntityPage() {
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [pid, pages, attributes, label, type, computed]);
+  }, [pid, eid, pages, attributes, label, type, computed]);
 
   const changed = useChanges(
     {
@@ -196,7 +212,8 @@ export function EntityPage() {
       type_id: typeId,
       attributes,
       use_custom_description: custom,
-      description_pages: customPages,
+      description_pages: pageTexts(customPages),
+      page_colors: pageColors(customPages),
       computed,
     },
     entity.data,
@@ -207,6 +224,7 @@ export function EntityPage() {
       attributes: "атрибуты",
       use_custom_description: "описание",
       description_pages: "описание",
+      page_colors: "описание",
       computed: "формулы",
     },
   );
@@ -227,7 +245,8 @@ export function EntityPage() {
         type_id: typeId,
         attributes,
         use_custom_description: custom,
-        description_pages: customPages,
+        description_pages: pageTexts(customPages),
+        page_colors: pageColors(customPages),
         computed,
       });
       toast.ok("Сохранено");
@@ -410,6 +429,13 @@ export function EntityPage() {
                   onChange={setCustomPages}
                   rendered={preview?.pages}
                   limit={preview?.limit ?? 2000}
+                  suggestions={buildSuggestions({
+                    attributes,
+                    // В меню видны и типовые формулы, и собственные.
+                    computed: [...(type?.computed ?? []), ...computed],
+                    values: preview?.computed,
+                    relationTypes,
+                  })}
                   hint={
                     <Hint id="entity-pages">
                       Атрибуты подставляются так же, как в типе: <code>{"{{ население }}"}</code>.

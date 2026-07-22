@@ -3,7 +3,9 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
 import { AttributesEditor, attrPaths } from "../components/AttributesEditor";
-import { PagesEditor } from "../components/PagesEditor";
+import { PagesEditor, pageColors, pageTexts, toPages } from "../components/PagesEditor";
+import type { Page } from "../components/PagesEditor";
+import { buildSuggestions } from "../components/suggestions";
 import { ComputedEditor } from "../components/ComputedEditor";
 import { EntityCard } from "../components/EntityCard";
 import { Hint } from "../components/Hint";
@@ -19,13 +21,16 @@ const SAMPLE_SCHEMA: Record<string, unknown> = {
   гигаструктуры: [],
 };
 
-const DEFAULT_TEMPLATE = `**{{ label }}**
+const DEFAULT_PAGE: Page[] = [{ text: `**{{ label }}**
 Столица: {{ столица }}
 Население: {{ население }}
 
 **Вооружённые силы**
 Личный состав: {{ ВС.людские_ресурсы }}
-Танки: {{ ВС.танки }}`;
+Танки: {{ ВС.танки }}`, color: "" }];
+
+/** Типы связей для меню вставки: у типа нет своих связей, показываем частые. */
+const RELATION_HINTS = ["союзник", "враг", "состав"];
 
 type Tab = "pages" | "computed" | "schema";
 
@@ -49,7 +54,7 @@ export function EntityTypeEditorPage() {
   const [tab, setTab] = useState<Tab>("pages");
   const [label, setLabel] = useState("");
   const [slug, setSlug] = useState("");
-  const [pages, setPages] = useState<string[]>([DEFAULT_TEMPLATE]);
+  const [pages, setPages] = useState<Page[]>(DEFAULT_PAGE);
   const [computed, setComputed] = useState<ComputedField[]>([]);
   // Через него редактор формул вставляет {{ выч.путь }} в страницу описания.
   const insertRef = useRef<((text: string) => void) | null>(null);
@@ -69,7 +74,12 @@ export function EntityTypeEditorPage() {
     setSlug(existing.slug);
     // У типов, созданных до появления страниц, описание лежит одной строкой.
     const saved = existing.description_pages ?? [];
-    setPages(saved.length > 0 ? saved : [existing.attributes_template || ""]);
+    setPages(
+      toPages(
+        saved.length > 0 ? saved : [existing.attributes_template || ""],
+        existing.page_colors ?? [],
+      ),
+    );
     setComputed(existing.computed ?? []);
     // У типов, созданных до появления структуры, она пустая — показываем заготовку.
     const savedSchema = existing.attributes_schema ?? {};
@@ -83,7 +93,8 @@ export function EntityTypeEditorPage() {
       try {
         setPreview(
           await api.previewPages(pid, {
-            pages,
+            pages: pageTexts(pages),
+            page_colors: pageColors(pages),
             attributes: schema,
             label: label || "Пример",
             computed,
@@ -108,7 +119,8 @@ export function EntityTypeEditorPage() {
     const payload = {
       label,
       slug,
-      description_pages: pages,
+      description_pages: pageTexts(pages),
+      page_colors: pageColors(pages),
       attributes_schema: schema,
       computed,
     };
@@ -184,6 +196,12 @@ export function EntityTypeEditorPage() {
               insertRef={insertRef}
               rendered={preview?.pages}
               limit={preview?.limit ?? 2000}
+              suggestions={buildSuggestions({
+                attributes: schema,
+                computed,
+                values: preview?.computed,
+                relationTypes: RELATION_HINTS,
+              })}
               hint={
                 <Hint id="type-pages">
                   Jinja2 с кириллицей: <code>{"{{ население }}"}</code>. Вложенность через точку:{" "}
@@ -194,8 +212,10 @@ export function EntityTypeEditorPage() {
                   <code>{'{{ союзники | через_запятую(пусто="нет") }}'}</code>,{" "}
                   <code>{"{{ духи | сколько }}"}</code>, а для списка объектов —{" "}
                   <code>{'{{ гигаструктуры | строки("{название} — {мощь}") }}'}</code>. Страницы
-                  игрок листает в Discord кнопками — так статы длиннее лимита эмбеда всё-таки
-                  помещаются.
+                  игрок листает в Discord кнопками. Правая кнопка мыши в поле — вставить
+                  атрибут, формулу или особую переменную (игроки, связи); цвет полосы
+                  эмбеда задаётся для каждой страницы отдельно. Особые переменные в
+                  предпросмотре показаны на примере — у типа своих игроков и связей нет.
                 </Hint>
               }
             />

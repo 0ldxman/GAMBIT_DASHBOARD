@@ -142,6 +142,8 @@ class EntityTypeBase(BaseModel):
     # Страницы описания: каждая уходит отдельным эмбедом. Пусто — используется
     # attributes_template как единственная страница (типы до появления страниц).
     description_pages: list[str] = Field(default_factory=list)
+    # Цвет полосы эмбеда для каждой страницы: «#5865F2» либо пусто.
+    page_colors: list[str] = Field(default_factory=list)
     # Структура атрибутов по умолчанию — с неё начинается новая сущность типа.
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
     # Формулы от атрибутов, доступные в шаблоне как {{ выч.путь }}.
@@ -157,6 +159,7 @@ class EntityTypeUpdate(BaseModel):
     label: Optional[str] = None
     attributes_template: Optional[str] = None
     description_pages: Optional[list[str]] = None
+    page_colors: Optional[list[str]] = None
     attributes_schema: Optional[dict[str, Any]] = None
     computed: Optional[list[ComputedFieldIn]] = None
 
@@ -168,6 +171,7 @@ class EntityTypeOut(ORMModel):
     label: str
     attributes_template: str
     description_pages: list[str] = Field(default_factory=list)
+    page_colors: list[str] = Field(default_factory=list)
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
     computed: list[ComputedFieldIn] = Field(default_factory=list)
 
@@ -181,6 +185,7 @@ class EntityBase(BaseModel):
     # Особое описание замещает страницы типа целиком.
     use_custom_description: bool = False
     description_pages: list[str] = Field(default_factory=list)
+    page_colors: list[str] = Field(default_factory=list)
     # Собственные формулы: дополняют формулы типа, совпадение путей — переопределяет.
     computed: list[ComputedFieldIn] = Field(default_factory=list)
 
@@ -196,6 +201,7 @@ class EntityUpdate(BaseModel):
     attributes: Optional[dict[str, Any]] = None
     use_custom_description: Optional[bool] = None
     description_pages: Optional[list[str]] = None
+    page_colors: Optional[list[str]] = None
     computed: Optional[list[ComputedFieldIn]] = None
 
 
@@ -264,6 +270,7 @@ class EntityOut(ORMModel):
     attributes: dict[str, Any]
     use_custom_description: bool = False
     description_pages: list[str] = Field(default_factory=list)
+    page_colors: list[str] = Field(default_factory=list)
     computed: list[ComputedFieldIn] = Field(default_factory=list)
     members: list[MemberOut] = Field(default_factory=list)
 
@@ -368,8 +375,13 @@ class ChannelTreeOut(BaseModel):
 # ---------- предпросмотр описаний ----------
 class TemplatePagesRequest(BaseModel):
     pages: list[str] = Field(default_factory=list)
+    page_colors: list[str] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
     label: str = ""
+    # Чья это карточка. Задана — особые переменные (игроки, связи) берутся у
+    # настоящей сущности; пусто — подставляется пример, чтобы в редакторе типа
+    # было видно, как ляжет вёрстка.
+    entity_id: Optional[int] = None
     # Формулы типа: считаются на этих же атрибутах и подставляются в страницы.
     computed: list[ComputedFieldIn] = Field(default_factory=list)
     # Собственные формулы сущности. Сливаются с типовыми на стороне сервера,
@@ -379,6 +391,8 @@ class TemplatePagesRequest(BaseModel):
 
 class RenderedPage(BaseModel):
     rendered: str
+    # Цвет полосы эмбеда этой страницы; пусто — цвет по умолчанию.
+    color: str = ""
     # Длина готового текста — она и упирается в лимит эмбеда, а не длина шаблона.
     length: int
     over_limit: bool
@@ -702,6 +716,8 @@ class MeInfoOut(BaseModel):
     # Первая страница — для совместимости со старым ботом.
     rendered: str
     pages: list[str] = Field(default_factory=list)
+    # Цвет каждой страницы, тем же порядком.
+    colors: list[str] = Field(default_factory=list)
     picture_url: str = ""
 
 

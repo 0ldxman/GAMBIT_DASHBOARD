@@ -16,7 +16,7 @@ from app.computed import merge
 from app.computed import validate as validate_computed
 from app.database import get_db
 from app.descriptions import entity_computed
-from app.descriptions import render_entity_pages
+from app.descriptions import render_entity_card
 from app.discord_api import DiscordError
 from app.discord_api import get_guild_member
 from app.models import Entity
@@ -190,12 +190,17 @@ async def render_entity(
 ) -> TemplatePagesResponse:
     """Страницы карточки сущности — то же, что листает /me-info в Discord."""
     entity = await get_entity_or_404(project_id, entity_id, db)
-    rendered = await render_entity_pages(entity, db)
+    rendered, colors = await render_entity_card(entity, db)
     _, values = await entity_computed(entity, db)
     return TemplatePagesResponse(
         pages=[
-            RenderedPage(rendered=text, length=len(text), over_limit=len(text) > PAGE_SOFT_LIMIT)
-            for text in rendered
+            RenderedPage(
+                rendered=text,
+                length=len(text),
+                over_limit=len(text) > PAGE_SOFT_LIMIT,
+                color=color,
+            )
+            for text, color in zip(rendered, colors)
         ],
         limit=PAGE_SOFT_LIMIT,
         computed=[
@@ -297,6 +302,24 @@ async def remove_member(
 
 
 # ---------- связи ----------
+@router.get("/-/relations", response_model=list[RelationOut])
+async def list_project_relations(
+    project_id: int, db: AsyncSession = Depends(get_db)
+) -> list[EntityRelation]:
+    """Все связи проекта разом — для графа и экрана связей.
+
+    Путь с «-» вместо id: обычные ручки связей висят на конкретной сущности,
+    а этой нужен весь проект.
+    """
+    await get_project_or_404(project_id, db)
+    result = await db.execute(
+        select(EntityRelation)
+        .join(Entity, Entity.id == EntityRelation.parent_id)
+        .where(Entity.project_id == project_id)
+    )
+    return list(result.scalars().all())
+
+
 @router.get("/{entity_id}/relations", response_model=list[RelationOut])
 async def list_relations(
     project_id: int, entity_id: int, db: AsyncSession = Depends(get_db)

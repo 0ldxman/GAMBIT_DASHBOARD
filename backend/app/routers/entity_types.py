@@ -7,9 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.computed import compute
 from app.computed import merge
-from app.computed import template_extra
 from app.computed import validate as validate_computed
 from app.database import get_db
+from app.descriptions import SAMPLE_EXTRAS
+from app.descriptions import build_extras
+from app.descriptions import entity_extras
+from app.models import Entity
 from app.models import EntityType
 from app.routers.projects import get_project_or_404
 from app.schemas import ComputedValueOut
@@ -21,6 +24,7 @@ from app.schemas import TemplatePagesRequest
 from app.schemas import TemplatePagesResponse
 from app.security import require_master
 from app.templating import PAGE_SOFT_LIMIT
+from app.templating import as_colors
 from app.templating import format_number
 from app.templating import render_pages
 from app.templating import validate_template
@@ -91,7 +95,7 @@ async def create_type(
 
 @router.post("/preview-pages", response_model=TemplatePagesResponse)
 async def preview_pages(
-    project_id: int, body: TemplatePagesRequest
+    project_id: int, body: TemplatePagesRequest, db: AsyncSession = Depends(get_db)
 ) -> TemplatePagesResponse:
     """Предпросмотр страниц описания и значений формул.
 
@@ -100,6 +104,10 @@ async def preview_pages(
 
     Формулы считаются здесь же, на тех же атрибутах: мастеру нужно видеть и
     число в поле, и страницу, куда оно подставилось.
+
+    Особые переменные (игроки, связи) берутся у настоящей сущности, если она
+    указана; в редакторе типа сущности нет — там подставляется пример, иначе
+    вёрстку со списком союзников не на чем было бы посмотреть.
     """
     fields = merge(
         [field.model_dump() for field in body.computed],
@@ -125,16 +133,28 @@ async def preview_pages(
                 error=f"Страница {index}: {err}",
                 computed=computed,
             )
+    extras = SAMPLE_EXTRAS
+    if body.entity_id is not None:
+        entity = await db.get(Entity, body.entity_id)
+        if entity is not None and entity.project_id == project_id:
+            extras = await entity_extras(entity, db)
+
     rendered = render_pages(
         body.pages,
         body.attributes,
         label=body.label,
-        extra=template_extra(tree, body.attributes),
+        extra=build_extras(tree, body.attributes, extras),
     )
+    colors = as_colors(body.page_colors, len(rendered))
     return TemplatePagesResponse(
         pages=[
-            RenderedPage(rendered=text, length=len(text), over_limit=len(text) > PAGE_SOFT_LIMIT)
-            for text in rendered
+            RenderedPage(
+                rendered=text,
+                length=len(text),
+                over_limit=len(text) > PAGE_SOFT_LIMIT,
+                color=color,
+            )
+            for text, color in zip(rendered, colors)
         ],
         limit=PAGE_SOFT_LIMIT,
         computed=computed,

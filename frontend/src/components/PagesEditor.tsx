@@ -1,6 +1,24 @@
 import { useEffect, useRef } from "react";
 import type { MutableRefObject, ReactNode } from "react";
+import { CodeArea } from "./CodeArea";
+import type { SuggestionGroup } from "./CodeArea";
 import type { RenderedPage } from "../types";
+
+/** Страница описания: шаблон и цвет полосы эмбеда. */
+export interface Page {
+  text: string;
+  /** «#5865F2» либо пусто — цвет Discord по умолчанию. */
+  color: string;
+}
+
+const DEFAULT_COLOR = "#5865F2";
+
+/** Хранятся страницы и цвета двумя списками — собрать и разобрать. */
+export function toPages(texts: string[], colors: string[]): Page[] {
+  return texts.map((text, i) => ({ text, color: colors[i] ?? "" }));
+}
+export const pageTexts = (pages: Page[]) => pages.map((p) => p.text);
+export const pageColors = (pages: Page[]) => pages.map((p) => p.color);
 
 /** Куда вставлять текст: страница и позиция курсора в ней. */
 interface Caret {
@@ -22,14 +40,17 @@ export function PagesEditor({
   limit,
   hint,
   insertRef,
+  suggestions = [],
 }: {
-  pages: string[];
-  onChange: (pages: string[]) => void;
+  pages: Page[];
+  onChange: (pages: Page[]) => void;
   rendered?: RenderedPage[];
   limit: number;
   hint?: ReactNode;
   /** Сюда кладётся функция вставки текста — ею пользуется редактор формул. */
   insertRef?: MutableRefObject<((text: string) => void) | null>;
+  /** Что предлагать по правой кнопке: атрибуты, формулы, особые переменные. */
+  suggestions?: SuggestionGroup[];
 }) {
   // Последнее место, где стоял курсор. Пока страницу не трогали — конец первой.
   const caret = useRef<Caret>({ index: 0, start: -1, end: -1 });
@@ -39,19 +60,22 @@ export function PagesEditor({
     if (!insertRef) return;
     insertRef.current = (text: string) => {
       const { index, start, end } = caret.current;
-      const page = pages[index] ?? pages[0] ?? "";
-      const at = start < 0 ? page.length : start;
-      const to = end < 0 ? page.length : end;
-      const next = `${page.slice(0, at)}${text}${page.slice(to)}`;
+      const page = pages[index] ?? pages[0];
+      const body = page?.text ?? "";
+      const at = start < 0 ? body.length : start;
+      const to = end < 0 ? body.length : end;
+      const next = `${body.slice(0, at)}${text}${body.slice(to)}`;
       caret.current = { index, start: at + text.length, end: at + text.length };
       onChange(
-        pages.length > 0 ? pages.map((p, i) => (i === index ? next : p)) : [next],
+        pages.length > 0
+          ? pages.map((p, i) => (i === index ? { ...p, text: next } : p))
+          : [{ text: next, color: "" }],
       );
     };
   });
 
-  function patch(index: number, value: string) {
-    onChange(pages.map((p, i) => (i === index ? value : p)));
+  function patch(index: number, part: Partial<Page>) {
+    onChange(pages.map((p, i) => (i === index ? { ...p, ...part } : p)));
   }
   function remove(index: number) {
     onChange(pages.filter((_, i) => i !== index));
@@ -70,7 +94,7 @@ export function PagesEditor({
         <label style={{ margin: 0 }}>
           Страницы описания{pages.length > 1 ? ` (${pages.length})` : ""}
         </label>
-        <button className="ghost" onClick={() => onChange([...pages, ""])}>
+        <button className="ghost small" onClick={() => onChange([...pages, { text: "", color: "" }])}>
           + страница
         </button>
       </div>
@@ -82,48 +106,64 @@ export function PagesEditor({
 
       {pages.map((page, i) => {
         const info = rendered?.[i];
-        const length = info?.length ?? page.length;
+        const length = info?.length ?? page.text.length;
         const over = info ? info.over_limit : length > limit;
         return (
           <div className="page-block" key={i}>
             <div className="row spread">
-              <span className="muted" style={{ fontSize: 13 }}>
+              <span className="muted" style={{ fontSize: "var(--fs-cap)" }}>
                 Страница {i + 1}
               </span>
-              <div className="row" style={{ gap: 4, alignItems: "center" }}>
-                <span className={over ? "error" : "muted"} style={{ fontSize: 13 }}>
+              <div className="row" style={{ gap: 4 }}>
+                <span className={over ? "error" : "muted"} style={{ fontSize: "var(--fs-cap)" }}>
                   {length} / {limit}
                   {info ? "" : " (без подстановки)"}
                 </span>
-                <button className="ghost" title="Выше" onClick={() => move(i, -1)} disabled={i === 0}>
+                {/* Цвет полосы эмбеда именно этой страницы. */}
+                <input
+                  type="color"
+                  title="Цвет полосы эмбеда"
+                  value={page.color || DEFAULT_COLOR}
+                  style={{ width: 32, height: 28, padding: 2 }}
+                  onChange={(e) => patch(i, { color: e.target.value })}
+                />
+                {page.color && (
+                  <button
+                    className="icon"
+                    title="Убрать цвет — останется цвет Discord по умолчанию"
+                    onClick={() => patch(i, { color: "" })}
+                  >
+                    ⊘
+                  </button>
+                )}
+                <button className="icon" title="Выше" onClick={() => move(i, -1)} disabled={i === 0}>
                   ↑
                 </button>
                 <button
-                  className="ghost"
+                  className="icon"
                   title="Ниже"
                   onClick={() => move(i, 1)}
                   disabled={i === pages.length - 1}
                 >
                   ↓
                 </button>
-                <button className="ghost danger" title="Удалить" onClick={() => remove(i)}>
+                <button className="icon danger" title="Удалить" onClick={() => remove(i)}>
                   ✕
                 </button>
               </div>
             </div>
-            <textarea
-              value={page}
-              style={{ minHeight: 200, fontFamily: "ui-monospace, monospace" }}
-              onChange={(e) => patch(i, e.target.value)}
-              onSelect={(e) => {
-                const el = e.currentTarget;
-                caret.current = { index: i, start: el.selectionStart, end: el.selectionEnd };
+            <CodeArea
+              value={page.text}
+              suggestions={suggestions}
+              onChange={(text) => patch(i, { text })}
+              onSelectionChange={(start, end) => {
+                caret.current = { index: i, start, end };
               }}
             />
             {over && (
-              <div className="error" style={{ fontSize: 13 }}>
-                Страница длиннее {limit} символов — разбейте её, иначе в Discord
-                текст будет обрезан.
+              <div className="error">
+                Страница длиннее {limit} символов — разбейте её, иначе в Discord текст будет
+                обрезан.
               </div>
             )}
           </div>
@@ -132,4 +172,3 @@ export function PagesEditor({
     </div>
   );
 }
-
