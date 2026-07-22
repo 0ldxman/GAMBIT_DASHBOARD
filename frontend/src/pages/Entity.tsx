@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useChanges } from "../hooks";
 import { PingBell } from "../components/PingBell";
+import { AttributesEditor, attrPaths } from "../components/AttributesEditor";
 import { PagesEditor } from "../components/PagesEditor";
 import { ComputedEditor } from "../components/ComputedEditor";
 import { EntityCard } from "../components/EntityCard";
@@ -18,21 +19,9 @@ import type {
   Project,
   TemplatePages,
 } from "../types";
-import { AttributesEditor } from "./entity/AttributesEditor";
 import { MembersSection } from "./entity/MembersSection";
 import { RelationsSection } from "./entity/RelationsSection";
 import { ChannelsSection } from "./entity/ChannelsSection";
-
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
-/** Пути атрибутов для подсказки в формулах: до листа, списки — целиком. */
-function attrPaths(value: unknown, prefix = ""): string[] {
-  if (!isPlainObject(value)) return prefix ? [prefix] : [];
-  return Object.entries(value).flatMap(([key, item]) =>
-    attrPaths(item, prefix ? `${prefix}.${key}` : key),
-  );
-}
 
 /** Загруженный файл лежит на backend — в дашборде его отдаёт /api. */
 function pictureSrc(value: string): string {
@@ -143,6 +132,7 @@ export function EntityPage() {
   const [attributes, setAttributes] = useState<Record<string, unknown>>({});
   // Растёт при загрузке и сбросе — по нему редактор атрибутов пересобирает строки.
   const [attrVersion, setAttrVersion] = useState(0);
+  const [attrError, setAttrError] = useState<string | null>(null);
   const [computed, setComputed] = useState<ComputedField[]>([]);
   const [preview, setPreview] = useState<TemplatePages | null>(null);
   const [custom, setCustom] = useState(false);
@@ -222,6 +212,13 @@ export function EntityPage() {
   );
 
   async function save() {
+    if (attrError) {
+      // Иначе сохранились бы прежние атрибуты, а мастер бы решил, что
+      // вставленный в режиме JSON текст принят.
+      setTab("data");
+      toast.err(`Атрибуты не разобраны: ${attrError}`);
+      return;
+    }
     setSaving(true);
     try {
       await api.updateEntity(pid, eid, {
@@ -342,12 +339,15 @@ export function EntityPage() {
                 <Hint id="entity-attrs">
                   Вложенность — через точку: <code>ВС.людские_ресурсы</code>. В шаблоне это{" "}
                   <code>{"{{ ВС.людские_ресурсы }}"}</code>. Значение разбирается как JSON, если
-                  получается: <code>1200</code> станет числом, <code>["а","б"]</code> — списком.
+                  получается: <code>1200</code> станет числом. Кнопка <code>☰</code> превращает
+                  атрибут в список — тогда он правится по строке на элемент (объект списка
+                  пишется одной строкой JSON).
                 </Hint>
                 <AttributesEditor
                   initial={entity.data?.attributes ?? {}}
                   version={attrVersion}
                   onChange={setAttributes}
+                  onError={setAttrError}
                 />
               </Section>
 

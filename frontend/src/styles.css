@@ -377,6 +377,9 @@ td.actions { text-align: right; white-space: nowrap; }
 .attr-group-body { padding: var(--s2) var(--s3) var(--s3); display: flex; flex-direction: column; gap: 6px; }
 .attr-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.2fr) auto; gap: var(--s2); align-items: center; }
 .attr-key { color: var(--muted); font-size: var(--fs-cap); font-family: var(--mono); }
+/* Значение-список: строка на элемент, обычным шрифтом — это имена, не код. */
+.attr-row textarea { font-family: inherit; }
+button.icon.accent { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
 /* --- вычисляемые поля --- */
 .calc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s3); align-items: baseline; padding: 5px 0; }

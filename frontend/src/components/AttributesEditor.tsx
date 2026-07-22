@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { JsonEditor } from "../../components/JsonEditor";
-import { useLocalFlag } from "../../hooks";
+import { JsonEditor } from "./JsonEditor";
+import { useLocalFlag } from "../hooks";
 
 interface AttrRow {
   key: string;
@@ -25,6 +25,15 @@ export function flatten(obj: Record<string, unknown>, prefix = ""): AttrRow[] {
     }
   }
   return rows;
+}
+
+/** Пути до листьев: подсказка для формул и автодополнение путей в правках.
+ *  Список — лист целиком: внутрь него формулы и правки не ходят. */
+export function attrPaths(value: unknown, prefix = ""): string[] {
+  if (!isPlainObject(value)) return prefix ? [prefix] : [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    attrPaths(item, prefix ? `${prefix}.${key}` : key),
+  );
 }
 
 /** Строки с dot-path ключами → вложенный объект. */
@@ -54,32 +63,80 @@ export function unflatten(rows: AttrRow[]): Record<string, unknown> {
 /** Ключ без корня: «ВС.танки» → «танки». Корень уже написан в шапке группы. */
 const leaf = (path: string) => (path.includes(".") ? path.slice(path.indexOf(".") + 1) : path);
 
+/** Значение строки — список? Тогда правим его построчно, а не JSON-ом. */
+function asList(value: string): unknown[] | null {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Список → текст: одна строка на элемент, объекты компактным JSON. */
+function listToText(items: unknown[]): string {
+  return items
+    .map((item) => (typeof item === "string" ? item : JSON.stringify(item)))
+    .join("\n");
+}
+
+/** Текст → значение строки: пустые строки отбрасываются, числа и объекты
+ *  разбираются как JSON — то же правило, что и для обычного значения. */
+function textToList(text: string): string {
+  const items = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return line;
+      }
+    });
+  return JSON.stringify(items);
+}
+
 /**
- * Атрибуты сущности: строки, сгруппированные по корню пути.
+ * Атрибуты строками, сгруппированными по корню пути.
  *
  * У страны их бывает под сорок, и плоский список одинаковых строк читать
  * невозможно. Дерево в атрибутах уже есть (`ВС.танки`, `ресурсы.нефть`) —
  * редактор просто показывает его как дерево: группу можно свернуть, внутри
- * группы кнопка добавления сразу подставляет её префикс.
+ * группы кнопка добавления сразу подставляет её префикс. Списки правятся по
+ * строке на элемент, режим JSON остаётся для глубокой вложенности.
  *
- * Режим JSON остаётся для глубокой вложенности и списков.
+ * Используется дважды: на сущности — её собственные атрибуты, в типе —
+ * заготовка, с которой создаются новые сущности.
  */
 export function AttributesEditor({
   initial,
   version,
   onChange,
+  onError,
+  scope = "entity",
 }: {
   /** Атрибуты, пришедшие с сервера. */
   initial: Record<string, unknown>;
   /** Меняется при загрузке и сбросе — по нему редактор пересобирает строки. */
   version: number;
   onChange: (attributes: Record<string, unknown>) => void;
+  /**
+   * Битый JSON в режиме «JSON»: значение не применилось, и сохранять нельзя —
+   * иначе вставка чужой структуры молча запишет то, что было до неё.
+   */
+  onError?: (message: string | null) => void;
+  /** Разделяет память свёрнутых групп: у типа и у сущности она своя. */
+  scope?: string;
 }) {
   const [rows, setRows] = useState<AttrRow[]>(() => flatten(initial));
   const [jsonMode, setJsonMode] = useState(false);
   const [jsonText, setJsonText] = useState(() => JSON.stringify(initial, null, 2));
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // Черновой текст списков по индексу строки. Без него перевод строки в конце
+  // съедался бы пересборкой значения из JSON прямо во время набора.
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
 
   // Пересобираемся только по внешнему сигналу: иначе набор ключа перетасовывал
   // бы строки на каждом нажатии клавиши.
@@ -87,12 +144,47 @@ export function AttributesEditor({
     setRows(flatten(initial));
     setJsonText(JSON.stringify(initial, null, 2));
     setJsonError(null);
+    setDrafts({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
 
+  // Ошибку разбора отдаём наверх — по ней экран блокирует сохранение. Уходя
+  // (например, переключили вкладку), снимаем её: невидимая ошибка не должна
+  // навсегда запретить сохранять.
+  useEffect(() => {
+    onError?.(jsonError);
+    return () => onError?.(null);
+  }, [jsonError, onError]);
+
   function patchRows(next: AttrRow[]) {
+    // Строк стало больше или меньше — индексы поехали, и черновики начали бы
+    // показываться в чужих строках.
+    if (next.length !== rows.length) setDrafts({});
     setRows(next);
     onChange(unflatten(next));
+  }
+
+  /** Правка списка: черновик хранится как есть, в атрибуты уходит JSON. */
+  function patchList(index: number, text: string) {
+    setDrafts({ ...drafts, [index]: text });
+    patchRows(rows.map((x, i) => (i === index ? { ...x, value: textToList(text) } : x)));
+  }
+
+  /** Превратить значение в список и обратно — иначе новый список заводится
+   *  только вручную набранными скобками. Ничего не теряется: при обратном
+   *  превращении элементы склеиваются в строку через запятую. */
+  function toggleList(index: number) {
+    const row = rows[index];
+    const items = asList(row.value);
+    const next =
+      items === null
+        ? JSON.stringify(row.value.trim() ? [row.value] : [])
+        : listToText(items).split("\n").join(", ");
+    // Черновик снимаем совсем: пустая строка перекрыла бы новое значение.
+    const rest = { ...drafts };
+    delete rest[index];
+    setDrafts(rest);
+    patchRows(rows.map((x, i) => (i === index ? { ...x, value: next } : x)));
   }
 
   function patchJson(text: string) {
@@ -179,41 +271,67 @@ export function AttributesEditor({
             <AttrGroup
               key={root || "__root__"}
               root={root}
+              scope={scope}
               count={items.length}
               onAdd={() => addRow(root ? `${root}.` : "")}
             >
-              {items.map(({ row, index }) => (
-                <div className="attr-row" key={index}>
-                  <input
-                    className="mono"
-                    value={root ? leaf(row.key) : row.key}
-                    placeholder={root ? "поле" : "ключ или путь.через.точку"}
-                    onChange={(e) =>
-                      patchRows(
-                        rows.map((x, i) =>
-                          i === index
-                            ? { ...x, key: root ? `${root}.${e.target.value}` : e.target.value }
-                            : x,
-                        ),
-                      )
-                    }
-                  />
-                  <input
-                    value={row.value}
-                    placeholder="значение"
-                    onChange={(e) =>
-                      patchRows(rows.map((x, i) => (i === index ? { ...x, value: e.target.value } : x)))
-                    }
-                  />
-                  <button
-                    className="icon danger"
-                    title="Удалить атрибут"
-                    onClick={() => patchRows(rows.filter((_, i) => i !== index))}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
+              {items.map(({ row, index }) => {
+                const list = asList(row.value);
+                return (
+                  <div className="attr-row" key={index}>
+                    <input
+                      className="mono"
+                      value={root ? leaf(row.key) : row.key}
+                      placeholder={root ? "поле" : "ключ или путь.через.точку"}
+                      onChange={(e) =>
+                        patchRows(
+                          rows.map((x, i) =>
+                            i === index
+                              ? { ...x, key: root ? `${root}.${e.target.value}` : e.target.value }
+                              : x,
+                          ),
+                        )
+                      }
+                    />
+                    {list ? (
+                      <textarea
+                        // Одна строка — один элемент: JSON с кавычками мастеру
+                        // набирать не нужно, объекты пишутся строкой на объект.
+                        value={drafts[index] ?? listToText(list)}
+                        placeholder="по одному элементу на строку"
+                        style={{ minHeight: 68 }}
+                        onChange={(e) => patchList(index, e.target.value)}
+                      />
+                    ) : (
+                      <input
+                        value={row.value}
+                        placeholder="значение"
+                        onChange={(e) =>
+                          patchRows(
+                            rows.map((x, i) => (i === index ? { ...x, value: e.target.value } : x)),
+                          )
+                        }
+                      />
+                    )}
+                    <div className="row" style={{ gap: 0 }}>
+                      <button
+                        className={list ? "icon accent" : "icon"}
+                        title={list ? "Сделать обычным значением" : "Сделать списком"}
+                        onClick={() => toggleList(index)}
+                      >
+                        ☰
+                      </button>
+                      <button
+                        className="icon danger"
+                        title="Удалить атрибут"
+                        onClick={() => patchRows(rows.filter((_, i) => i !== index))}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </AttrGroup>
           ))}
           <div className="row">
@@ -230,16 +348,18 @@ export function AttributesEditor({
 /** Группа атрибутов с общим корнем; сворачивается и помнит своё состояние. */
 function AttrGroup({
   root,
+  scope,
   count,
   onAdd,
   children,
 }: {
   root: string;
+  scope: string;
   count: number;
   onAdd: () => void;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useLocalFlag(`attrs:${root}`, true);
+  const [open, setOpen] = useLocalFlag(`attrs:${scope}:${root}`, true);
   // Верхнеуровневые атрибуты без общего корня группой не оборачиваем.
   if (!root) return <div className="attr-group-body">{children}</div>;
 

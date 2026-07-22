@@ -16,14 +16,66 @@ Entity.attributes. Пример шаблона:
     Бюджет: {{ выч.бюджет.итого | со_знаком }}   → Бюджет: +12 320
     {{ выч.бюджет | поля }}                      → Деньги: 12 400
                                                    Минералы: -80
+
+Атрибут-список печатается через запятую сам, а фильтры дают другие виды:
+
+    {{ духи }}                                   → Милитаризм, Изоляционизм
+    {{ духи | список }}                          → • Милитаризм
+                                                   • Изоляционизм
+    {{ духи | нумерованный }}                    → 1. Милитаризм
+    {{ союзники | через_запятую(пусто="нет") }}  → нет
+    {{ духи | сколько }}                         → 2
+    {{ флот | строки("{имя} — {тоннаж}") }}      → Балтийский — 84 300
+
+Полный Jinja2 тоже доступен: `{% for %}`, `join`, `sort`, `map`, срезы.
 """
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from jinja2 import ChainableUndefined
 from jinja2.sandbox import SandboxedEnvironment
+
+# Неразрывный пробел между разрядами: в Discord строка не переносится по нему.
+_THIN_SPACE = " "
+
+
+def format_number(value: Any) -> str:
+    """1050000.0 → «1 050 000», 12.345 → «12,35». Не число — как есть.
+
+    Список превращается в перечисление через запятую: repr питоновского списка
+    (`['А', 'Б']`) в карточке игрока выглядит как поломка, а не как данные.
+    """
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_item_text(item) for item in value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "" if value is None else str(value)
+    if isinstance(value, float) and not value.is_integer():
+        text = f"{round(value, 2):,.2f}".replace(",", _THIN_SPACE).replace(".", ",")
+    else:
+        text = f"{int(value):,}".replace(",", _THIN_SPACE)
+    return text
+
+
+def _item_text(value: Any) -> str:
+    """Один элемент списка строкой: число — с разрядами, объект — JSON."""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False)
+    return format_number(value)
+
+
+def _finalize(value: Any) -> Any:
+    """Что подставляется в `{{ … }}` перед выводом.
+
+    Трогаем только списки. Undefined обязан пройти нетронутым, иначе
+    отсутствующий атрибут перестанет рендериться пустой строкой; словари
+    оставлены как есть — для них есть фильтр `поля`.
+    """
+    return format_number(value) if isinstance(value, (list, tuple)) else value
+
 
 # SandboxedEnvironment — на случай недоверенного ввода; ChainableUndefined —
 # отсутствующие ключи рендерятся пустой строкой, а не падают ошибкой.
@@ -32,21 +84,27 @@ _env = SandboxedEnvironment(
     autoescape=False,
     trim_blocks=True,
     lstrip_blocks=True,
+    finalize=_finalize,
 )
 
-# Неразрывный пробел между разрядами: в Discord строка не переносится по нему.
-_THIN_SPACE = " "
+
+def _as_items(value: Any) -> list[Any] | None:
+    """Элементы списка (или значения словаря). Не коллекция — None."""
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if isinstance(value, dict):
+        return list(value.values())
+    return None
 
 
-def format_number(value: Any) -> str:
-    """1050000.0 → «1 050 000», 12.345 → «12,35». Не число — как есть."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return "" if value is None else str(value)
-    if isinstance(value, float) and not value.is_integer():
-        text = f"{round(value, 2):,.2f}".replace(",", _THIN_SPACE).replace(".", ",")
-    else:
-        text = f"{int(value):,}".replace(",", _THIN_SPACE)
-    return text
+def _dig(item: dict[str, Any], path: str) -> Any:
+    """Поле элемента по dot-path — как везде в проекте."""
+    node: Any = item
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
 
 
 def _filter_signed(value: Any) -> str:
@@ -81,9 +139,76 @@ def _filter_fields(value: Any, знак: bool = False) -> str:
     return "\n".join(lines)
 
 
+def _filter_bullets(value: Any, маркер: str = "•") -> str:
+    """Список по строке на элемент: `{{ духи | список }}`."""
+    items = _as_items(value)
+    if items is None:
+        return format_number(value)
+    return "\n".join(f"{маркер} {_item_text(item)}".strip() for item in items)
+
+
+def _filter_numbered(value: Any) -> str:
+    """Нумерованный список: `{{ духи | нумерованный }}`."""
+    items = _as_items(value)
+    if items is None:
+        return format_number(value)
+    return "\n".join(f"{i}. {_item_text(item)}" for i, item in enumerate(items, 1))
+
+
+def _filter_comma(value: Any, разделитель: str = ", ", пусто: str = "") -> str:
+    """Список в строку. `пусто` — что показать вместо пустого перечисления."""
+    items = _as_items(value)
+    if items is None:
+        return format_number(value)
+    if not items:
+        return пусто
+    return разделитель.join(_item_text(item) for item in items)
+
+
+def _filter_count(value: Any) -> int:
+    """Сколько элементов: `{{ духи | сколько }}`."""
+    items = _as_items(value)
+    if items is not None:
+        return len(items)
+    return len(value) if isinstance(value, str) else 0
+
+
+# `{имя}` в формате для фильтра «строки».
+_FIELD_RE = re.compile(r"\{([^{}]+)\}")
+
+
+def _filter_rows(value: Any, формат: str) -> str:
+    """Список объектов по формату: `строки("{название} — {мощь}")`.
+
+    Поля подставляются регуляркой, а не str.format: через формат-строку
+    открывался бы доступ к атрибутам объектов, чего песочница не допускает.
+    Элементы-не-словари пропускаются, отсутствующее поле даёт пустую строку.
+    """
+    items = _as_items(value)
+    if items is None:
+        return format_number(value)
+
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        def field(match: re.Match[str], source: dict[str, Any] = item) -> str:
+            found = _dig(source, match.group(1).strip())
+            return "" if found is None else _item_text(found)
+
+        lines.append(_FIELD_RE.sub(field, формат))
+    return "\n".join(lines)
+
+
 _env.filters["число"] = format_number
 _env.filters["со_знаком"] = _filter_signed
 _env.filters["поля"] = _filter_fields
+_env.filters["список"] = _filter_bullets
+_env.filters["нумерованный"] = _filter_numbered
+_env.filters["через_запятую"] = _filter_comma
+_env.filters["сколько"] = _filter_count
+_env.filters["строки"] = _filter_rows
 
 
 def render_entity_template(

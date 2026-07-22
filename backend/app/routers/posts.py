@@ -46,6 +46,38 @@ async def get_post_or_404(project_id: int, post_id: int, db: AsyncSession) -> Po
     return post
 
 
+def _at_path(attributes: dict, path: str) -> object:
+    node: object = attributes
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _list_conflict(attributes: dict, path: str) -> str | None:
+    """Путь ВНУТРЬ списка: «духи.2» заменил бы весь «духи» объектом.
+
+    Точка в пути — это вложенность словарей, а не индекс: expand_dot_paths
+    сделает из «духи.2» {"духи": {"2": …}}, и deep_merge молча снесёт список.
+    Ловим это до применения, чтобы правка стала понятной ошибкой, а не потерей
+    данных.
+    """
+    node: object = attributes
+    parts = path.split(".")
+    for index, part in enumerate(parts[:-1]):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+        if isinstance(node, list):
+            prefix = ".".join(parts[: index + 1])
+            return (
+                f"«{prefix}» — список; правьте его целиком "
+                "или режимами «добавить»/«убрать»"
+            )
+    return None
+
+
 def run_edit_ops(
     attributes: dict, fields: list, ops: list, attrs: dict
 ) -> tuple[dict, dict[str, str]]:
@@ -67,8 +99,26 @@ def run_edit_ops(
         if not path:
             continue
         mode = op.get("mode") or "set"
+        conflict = _list_conflict(current, path)
+        if conflict:
+            errors[path] = conflict
+            continue
         if mode == "delete":
             current = apply_attribute_patch(current, {path: None})
+        elif mode in ("append", "remove"):
+            items = _at_path(current, path)
+            if items is None:
+                items = []
+            if not isinstance(items, list):
+                errors[path] = f"«{path}» — не список, элемент добавить некуда"
+                continue
+            value = op.get("value")
+            if mode == "append":
+                # Идемпотентно: выдать дух дважды — не то же, что выдать два духа.
+                updated = items if value in items else [*items, value]
+            else:
+                updated = [item for item in items if item != value]
+            current = apply_attribute_patch(current, {path: updated})
         elif mode == "expr":
             # Формулы доступны как «выч.бюджет.итого» — типовые вместе с
             # собственными формулами сущности.
@@ -140,15 +190,6 @@ def _show(value: object) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False)
-
-
-def _at_path(attributes: dict, path: str) -> object:
-    node: object = attributes
-    for part in path.split("."):
-        if not isinstance(node, dict) or part not in node:
-            return None
-        node = node[part]
-    return node
 
 
 @router.post("/preview-edits", response_model=list[EditPreviewOut])

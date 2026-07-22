@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useChanges, useDebounced } from "../hooks";
+import { attrPaths } from "../components/AttributesEditor";
 import { DiscordPreview } from "../components/DiscordPreview";
 import { Modal } from "../components/Modal";
 import { Section } from "../components/Section";
@@ -49,18 +50,18 @@ const MODE_LABEL: Record<EditMode, string> = {
   set: "=  записать",
   expr: "ƒ  вычислить",
   delete: "✕  удалить",
+  append: "+  добавить в список",
+  remove: "−  убрать из списка",
 };
 
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
-/** Пути атрибутов сущности для автодополнения: до листа, списки — целиком. */
-function attrPaths(value: unknown, prefix = ""): string[] {
-  if (!isPlainObject(value)) return prefix ? [prefix] : [];
-  return Object.entries(value).flatMap(([key, item]) =>
-    attrPaths(item, prefix ? `${prefix}.${key}` : key),
-  );
-}
+/** Что подсказывать в поле значения — зависит от режима. */
+const VALUE_PLACEHOLDER: Record<EditMode, string> = {
+  set: "значение",
+  expr: "ВС.танки - 10",
+  delete: "",
+  append: "элемент списка",
+  remove: "элемент списка",
+};
 
 /**
  * Значение режима «записать» приходит из поля строкой. Числа, булевы и списки
@@ -1002,7 +1003,10 @@ function EditsSection({
         Применяются при публикации. В режиме «вычислить» можно писать формулы по атрибутам:{" "}
         <code>ВС.людские_ресурсы - 10</code>, <code>min(экономика.ВВП * 1.05, 5000)</code>.
         Доступны вычисляемые поля (<code>казна + выч.бюджет.итого</code>) и списки:{" "}
-        <code>длина(духи)</code>, <code>сумма(гигаструктуры, "мощь")</code>.
+        <code>длина(духи)</code>, <code>сумма(гигаструктуры, "мощь")</code>. Списки правятся
+        режимами «добавить»/«убрать» — по одному элементу, путь остаётся тот же{" "}
+        (<code>духи</code>, а не <code>духи.2</code>: точка в пути — это вложенность, а не
+        номер элемента).
       </Hint>
 
       {entities.length === 0 && <p className="muted">Сначала создайте сущности.</p>}
@@ -1074,7 +1078,7 @@ function EditsSection({
                       {op.mode !== "delete" && (
                         <input
                           className={op.mode === "expr" ? "mono grow" : "grow"}
-                          placeholder={op.mode === "expr" ? "ВС.танки - 10" : "значение"}
+                          placeholder={VALUE_PLACEHOLDER[op.mode]}
                           value={String(op.value ?? "")}
                           onChange={(e) => patchOp(i, j, { value: e.target.value })}
                         />

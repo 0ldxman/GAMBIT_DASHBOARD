@@ -195,8 +195,8 @@ export interface Entity {
 
 export type PostStatus = "draft" | "scheduled" | "published";
 
-/** Режим операции над атрибутом: записать / вычислить / удалить. */
-export type EditMode = "set" | "expr" | "delete";
+/** Режим операции: записать / вычислить / удалить / добавить в список / убрать из него. */
+export type EditMode = "set" | "expr" | "delete" | "append" | "remove";
 
 export interface EntityEditOp {
   path: string;

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync } from "../hooks";
-import { JsonEditor } from "../components/JsonEditor";
+import { AttributesEditor, attrPaths } from "../components/AttributesEditor";
 import { PagesEditor } from "../components/PagesEditor";
 import { ComputedEditor } from "../components/ComputedEditor";
 import { EntityCard } from "../components/EntityCard";
@@ -10,14 +10,14 @@ import { Hint } from "../components/Hint";
 import { useToast } from "../components/Feedback";
 import type { ComputedField, EntityType, TemplatePages } from "../types";
 
-const SAMPLE_HINT = `{
-  "столица": "Москва",
-  "население": 146000000,
-  "ВС": {
-    "людские_ресурсы": 900000,
-    "танки": 2100
-  }
-}`;
+/** Заготовка для нового типа: показывает и вложенность, и списки. */
+const SAMPLE_SCHEMA: Record<string, unknown> = {
+  столица: "Москва",
+  население: 146000000,
+  ВС: { людские_ресурсы: 900000, танки: 2100 },
+  духи: [],
+  гигаструктуры: [],
+};
 
 const DEFAULT_TEMPLATE = `**{{ label }}**
 Столица: {{ столица }}
@@ -26,17 +26,6 @@ const DEFAULT_TEMPLATE = `**{{ label }}**
 **Вооружённые силы**
 Личный состав: {{ ВС.людские_ресурсы }}
 Танки: {{ ВС.танки }}`;
-
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
-/** Пути атрибутов для подсказки в формулах: до листа, списки — целиком. */
-function attrPaths(value: unknown, prefix = ""): string[] {
-  if (!isPlainObject(value)) return prefix ? [prefix] : [];
-  return Object.entries(value).flatMap(([key, item]) =>
-    attrPaths(item, prefix ? `${prefix}.${key}` : key),
-  );
-}
 
 type Tab = "pages" | "computed" | "schema";
 
@@ -65,18 +54,12 @@ export function EntityTypeEditorPage() {
   // Через него редактор формул вставляет {{ выч.путь }} в страницу описания.
   const insertRef = useRef<((text: string) => void) | null>(null);
   // Структура атрибутов: и заготовка для новых сущностей, и данные предпросмотра.
-  const [sample, setSample] = useState(SAMPLE_HINT);
-  const [sampleError, setSampleError] = useState<string | null>(null);
+  const [schema, setSchema] = useState<Record<string, unknown>>(SAMPLE_SCHEMA);
+  // Растёт при загрузке типа — по нему редактор атрибутов пересобирает строки.
+  const [schemaVersion, setSchemaVersion] = useState(0);
+  const [schemaError, setSchemaError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TemplatePages | null>(null);
   const [loaded, setLoaded] = useState(false);
-  // Разобранная структура атрибутов — из неё берутся подсказки путей для формул.
-  const parsedSample = useMemo(() => {
-    try {
-      return sample.trim() ? JSON.parse(sample) : {};
-    } catch {
-      return {};
-    }
-  }, [sample]);
   const [busy, setBusy] = useState(false);
 
   // Заполняем форму, когда тип подгрузился; правки пользователя не затираем.
@@ -88,31 +71,20 @@ export function EntityTypeEditorPage() {
     const saved = existing.description_pages ?? [];
     setPages(saved.length > 0 ? saved : [existing.attributes_template || ""]);
     setComputed(existing.computed ?? []);
-    // У типов, созданных до появления структуры, она пустая — показываем подсказку.
-    const schema = existing.attributes_schema ?? {};
-    setSample(Object.keys(schema).length > 0 ? JSON.stringify(schema, null, 2) : SAMPLE_HINT);
+    // У типов, созданных до появления структуры, она пустая — показываем заготовку.
+    const savedSchema = existing.attributes_schema ?? {};
+    setSchema(Object.keys(savedSchema).length > 0 ? savedSchema : SAMPLE_SCHEMA);
+    setSchemaVersion((v) => v + 1);
     setLoaded(true);
   }, [existing, loaded]);
 
   useEffect(() => {
     const handle = setTimeout(async () => {
-      let attrs: Record<string, unknown> = {};
-      try {
-        attrs = sample.trim() ? JSON.parse(sample) : {};
-      } catch {
-        setPreview({
-          pages: [],
-          limit: 2000,
-          error: "Некорректный JSON атрибутов",
-          computed: [],
-        });
-        return;
-      }
       try {
         setPreview(
           await api.previewPages(pid, {
             pages,
-            attributes: attrs,
+            attributes: schema,
             label: label || "Пример",
             computed,
           }),
@@ -122,17 +94,14 @@ export function EntityTypeEditorPage() {
       }
     }, 300);
     return () => clearTimeout(handle);
-  }, [pages, sample, label, computed, pid]);
+  }, [pages, schema, label, computed, pid]);
 
   async function save() {
-    let schema: Record<string, unknown>;
-    try {
-      const parsed = sample.trim() ? JSON.parse(sample) : {};
-      if (!isPlainObject(parsed)) throw new Error("ожидается объект");
-      schema = parsed;
-    } catch (e) {
+    if (schemaError) {
+      // Иначе сохранился бы предыдущий вариант структуры, а мастер бы решил,
+      // что вставленный JSON принят.
       setTab("schema");
-      toast.err(`Структура атрибутов — некорректный JSON: ${String(e)}`);
+      toast.err(`Атрибуты не разобраны: ${schemaError}`);
       return;
     }
     setBusy(true);
@@ -219,8 +188,14 @@ export function EntityTypeEditorPage() {
                 <Hint id="type-pages">
                   Jinja2 с кириллицей: <code>{"{{ население }}"}</code>. Вложенность через точку:{" "}
                   <code>{"{{ ВС.людские_ресурсы }}"}</code>. Отсутствующий атрибут просто останется
-                  пустым. Страницы игрок листает в Discord кнопками — так статы длиннее лимита
-                  эмбеда всё-таки помещаются.
+                  пустым. Атрибут-список сам печатается через запятую, а иначе:{" "}
+                  <code>{"{{ духи | список }}"}</code>,{" "}
+                  <code>{"{{ духи | нумерованный }}"}</code>,{" "}
+                  <code>{'{{ союзники | через_запятую(пусто="нет") }}'}</code>,{" "}
+                  <code>{"{{ духи | сколько }}"}</code>, а для списка объектов —{" "}
+                  <code>{'{{ гигаструктуры | строки("{название} — {мощь}") }}'}</code>. Страницы
+                  игрок листает в Discord кнопками — так статы длиннее лимита эмбеда всё-таки
+                  помещаются.
                 </Hint>
               }
             />
@@ -240,7 +215,7 @@ export function EntityTypeEditorPage() {
                 fields={computed}
                 onChange={setComputed}
                 values={preview?.computed}
-                paths={attrPaths(parsedSample)}
+                paths={attrPaths(schema)}
                 onInsert={(text) => {
                   insertRef.current?.(text);
                   toast.ok("Вставлено в описание");
@@ -254,22 +229,17 @@ export function EntityTypeEditorPage() {
               <Hint id="type-schema">
                 Новая сущность этого типа создаётся сразу с этими полями и значениями — их
                 останется только заполнить. Отсюда же берутся данные для предпросмотра справа и
-                подсказки путей в формулах.
+                подсказки путей в формулах. Вложенность — через точку (<code>ВС.танки</code>),
+                кнопка <code>☰</code> делает атрибут списком, а режим <b>JSON</b> показывает
+                всю структуру целиком — им удобно переносить заготовку между типами.
               </Hint>
-              <JsonEditor
-                value={sample}
-                minHeight={280}
-                onChange={(v) => {
-                  setSample(v);
-                  try {
-                    JSON.parse(v || "{}");
-                    setSampleError(null);
-                  } catch (e) {
-                    setSampleError(String(e));
-                  }
-                }}
+              <AttributesEditor
+                initial={schema}
+                version={schemaVersion}
+                scope="type"
+                onChange={setSchema}
+                onError={setSchemaError}
               />
-              {sampleError && <div className="error">{sampleError}</div>}
             </div>
           )}
         </div>
