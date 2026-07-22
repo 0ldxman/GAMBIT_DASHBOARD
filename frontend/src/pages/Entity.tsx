@@ -361,7 +361,7 @@ export function EntityPage() {
                 hint={
                   <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
                     Атрибуты подставляются так же, как в типе: <code>{"{{ население }}"}</code>.
-                    Каждая страница — отдельный эмбед.
+                    Страницы листаются в Discord кнопками.
                   </p>
                 }
               />

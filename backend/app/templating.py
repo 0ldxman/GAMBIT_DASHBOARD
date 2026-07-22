@@ -79,7 +79,7 @@ def render_pages(
     label: str = "",
     extra: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Отрендерить страницы описания. Каждая уходит отдельным эмбедом."""
+    """Отрендерить страницы описания. В Discord они листаются кнопками."""
     return [
         render_entity_template(page, attributes, label=label, extra=extra)[:PAGE_HARD_LIMIT]
         for page in pages

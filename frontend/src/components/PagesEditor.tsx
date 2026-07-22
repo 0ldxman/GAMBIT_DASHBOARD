@@ -4,7 +4,7 @@ import type { RenderedPage } from "../types";
 /** Редактор страниц описания.
  *
  * У эмбеда есть предел длины, поэтому длинные статы разбиваются на страницы —
- * каждая уходит в Discord отдельным эмбедом. Счётчик считает ГОТОВЫЙ текст:
+ * в Discord игрок листает их кнопками. Счётчик считает ГОТОВЫЙ текст:
  * одна строка `{{ описание }}` может развернуться в тысячи символов.
  */
 export function PagesEditor({
@@ -99,7 +99,7 @@ export function PagesEditor({
   );
 }
 
-/** Предпросмотр готовых страниц — так их увидят в Discord. */
+/** Предпросмотр готовых страниц: в Discord они листаются кнопками. */
 export function PagesPreview({ pages, error }: { pages?: RenderedPage[]; error?: string | null }) {
   if (error) return <div className="error">{error}</div>;
   if (!pages || pages.length === 0) return <p className="muted">Описание пустое.</p>;
@@ -109,7 +109,7 @@ export function PagesPreview({ pages, error }: { pages?: RenderedPage[]; error?:
         <div key={i}>
           {pages.length > 1 && (
             <span className="muted" style={{ fontSize: 13 }}>
-              Эмбед {i + 1}
+              Страница {i + 1} из {pages.length}
             </span>
           )}
           <div className="embed-preview">{p.rendered || " "}</div>

@@ -149,7 +149,7 @@ async def delete_entity(
 async def render_entity(
     project_id: int, entity_id: int, db: AsyncSession = Depends(get_db)
 ) -> TemplatePagesResponse:
-    """Страницы карточки сущности — то же, что покажет /me-info в Discord."""
+    """Страницы карточки сущности — то же, что листает /me-info в Discord."""
     entity = await get_entity_or_404(project_id, entity_id, db)
     rendered = await render_entity_pages(entity, db)
     return TemplatePagesResponse(

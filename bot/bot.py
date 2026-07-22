@@ -178,6 +178,50 @@ async def on_ready() -> None:
     logger.info("Бот запущен как %s", bot.user)
 
 
+class PagesView(discord.ui.View):
+    """Перелистывание страниц карточки кнопками.
+
+    Показываем ровно один эмбед и меняем его на месте: пачка эмбедов сразу
+    забивала бы канал и всё равно упиралась в предел в 10 штук на сообщение.
+    """
+
+    def __init__(self, embeds: list[discord.Embed], user_id: int) -> None:
+        super().__init__(timeout=600)
+        self.embeds = embeds
+        self.user_id = user_id
+        self.index = 0
+        self._sync()
+
+    def _sync(self) -> None:
+        self.prev_page.disabled = self.index == 0
+        self.next_page.disabled = self.index >= len(self.embeds) - 1
+        self.counter.label = f"{self.index + 1} / {len(self.embeds)}"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Карточка эфемерная, но кнопки всё равно закрываем: мало ли где её покажут.
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Это не ваша карточка.", ephemeral=True)
+            return False
+        return True
+
+    async def _flip(self, interaction: discord.Interaction, delta: int) -> None:
+        self.index = max(0, min(len(self.embeds) - 1, self.index + delta))
+        self._sync()
+        await interaction.response.edit_message(embed=self.embeds[self.index], view=self)
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def prev_page(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self._flip(interaction, -1)
+
+    @discord.ui.button(label="1 / 1", style=discord.ButtonStyle.secondary, disabled=True)
+    async def counter(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        """Только счётчик — кнопка всегда выключена."""
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self._flip(interaction, 1)
+
+
 # ---------- слэш-команды ----------
 @bot.tree.command(name="me-info", description="Показать карточку вашей сущности")
 async def me_info(interaction: discord.Interaction) -> None:
@@ -192,20 +236,19 @@ async def me_info(interaction: discord.Interaction) -> None:
         return
 
     # Описание может не влезть в один эмбед — мастер разбивает его на страницы.
-    # Заголовок и картинка идут только на первой, дальше сплошной текст.
+    # Показываем по одной, остальные доступны кнопками.
     pages: list[str] = data.get("pages") or [data.get("rendered") or ""]
     embeds: list[discord.Embed] = []
-    for index, page in enumerate(pages[:10]):  # больше 10 эмбедов Discord не примет
-        embed = discord.Embed(
-            title=data["label"] if index == 0 else None,
-            description=page or "—",
-        )
-        if index == 0 and data.get("picture_url"):
+    for index, page in enumerate(pages):
+        embed = discord.Embed(title=data["label"], description=page or "—")
+        if data.get("picture_url"):
             embed.set_thumbnail(url=data["picture_url"])
         if len(pages) > 1:
             embed.set_footer(text=f"Страница {index + 1} из {len(pages)}")
         embeds.append(embed)
-    await interaction.response.send_message(embeds=embeds, ephemeral=True)
+
+    view = PagesView(embeds, interaction.user.id) if len(embeds) > 1 else discord.utils.MISSING
+    await interaction.response.send_message(embed=embeds[0], view=view, ephemeral=True)
 
 
 @bot.tree.command(name="ping-master", description="Позвать мастера — уведомление уйдёт в дашборд")
