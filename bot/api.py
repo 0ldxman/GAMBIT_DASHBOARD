@@ -37,6 +37,17 @@ class ApiClient:
         )
         r.raise_for_status()
 
+    # ---------- личные сообщения игрокам ----------
+    async def pending_dms(self) -> list[dict[str, Any]]:
+        r = await self._client.get("/internal/pending-dms")
+        r.raise_for_status()
+        return r.json()
+
+    async def mark_dm_result(self, dm_id: int, error: str = "") -> None:
+        """Пустая ошибка — доставлено; иначе строка остаётся в истории с текстом."""
+        r = await self._client.post(f"/internal/dms/{dm_id}/result", json={"error": error})
+        r.raise_for_status()
+
     # ---------- вебхуки ----------
     async def get_webhook(self, channel_id: int) -> Optional[dict[str, Any]]:
         r = await self._client.get(f"/internal/webhooks/{channel_id}")

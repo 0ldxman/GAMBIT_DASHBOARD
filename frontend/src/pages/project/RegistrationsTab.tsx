@@ -1,10 +1,11 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
 import { Empty, Skeleton } from "../../components/Empty";
-import { useConfirm, useToast } from "../../components/Feedback";
-import type { EntityType, Registration } from "../../types";
+import { useToast } from "../../components/Feedback";
+import type { Entity, Registration, RegistrationForm } from "../../types";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "ожидает",
@@ -17,6 +18,7 @@ const STATUS_BADGE: Record<string, string> = {
   rejected: "draft",
 };
 
+/** Заявки проекта целиком — вкладка «Входящие». */
 export function RegistrationsTab({
   projectId,
   onChange,
@@ -25,50 +27,69 @@ export function RegistrationsTab({
   /** Дать проекту пересчитать счётчик входящих. */
   onChange?: () => void;
 }) {
+  return <RegistrationList projectId={projectId} onChange={onChange} showForm />;
+}
+
+/**
+ * Список заявок с решением по каждой.
+ *
+ * Используется дважды: во «Входящих» — все заявки проекта, на экране формы —
+ * только её. Решение уходит игроку в личные сообщения, поэтому и одобрение, и
+ * отказ спрашивают текст: «отклонено» без причины игрок прочитает как молчание.
+ */
+export function RegistrationList({
+  projectId,
+  formId,
+  onChange,
+  showForm = false,
+}: {
+  projectId: number;
+  /** Показывать заявки только этой формы. */
+  formId?: number;
+  onChange?: () => void;
+  /** Подписывать, по какой форме заявка (во «Входящих» форм несколько). */
+  showForm?: boolean;
+}) {
   const [filter, setFilter] = useState<string>("pending");
   const regs = useAsync<Registration[]>(
-    () => api.listRegistrations(projectId, filter || undefined),
-    [projectId, filter],
+    () => api.listRegistrations(projectId, filter || undefined, formId),
+    [projectId, filter, formId],
   );
-  const types = useAsync<EntityType[]>(() => api.listTypes(projectId), [projectId]);
-  const [approving, setApproving] = useState<Registration | null>(null);
-  const confirm = useConfirm();
-  const toast = useToast();
+  const entities = useAsync<Entity[]>(() => api.listEntities(projectId), [projectId]);
+  const forms = useAsync<RegistrationForm[]>(
+    () => (showForm ? api.listForms(projectId) : Promise.resolve([])),
+    [projectId, showForm],
+  );
+  const [review, setReview] = useState<{ reg: Registration; approve: boolean } | null>(null);
 
-  async function reject(r: Registration) {
-    const ok = await confirm({
-      title: `Отклонить заявку ${r.discord_username || r.discord_user_id}?`,
-      body: "Игрок останется без сущности. Заявку можно будет посмотреть в списке отклонённых.",
-      confirmLabel: "Отклонить",
-      danger: true,
-    });
-    if (!ok) return;
-    try {
-      await api.rejectRegistration(projectId, r.id);
-      toast.ok("Заявка отклонена");
-      regs.reload();
-      onChange?.();
-    } catch (e) {
-      toast.err(e);
-    }
-  }
+  const formTitle = (id: number) => forms.data?.find((f) => f.id === id)?.title ?? "";
 
   return (
     <div>
       <div className="toolbar">
-        <select value={filter} style={{ width: 180 }} onChange={(e) => setFilter(e.target.value)}>
-          <option value="">все</option>
-          <option value="pending">ожидают</option>
-          <option value="approved">одобренные</option>
-          <option value="rejected">отклонённые</option>
-        </select>
+        <div className="subtabs">
+          {[
+            { value: "pending", label: "Ожидают" },
+            { value: "approved", label: "Одобренные" },
+            { value: "rejected", label: "Отклонённые" },
+            { value: "", label: "Все" },
+          ].map((option) => (
+            <button
+              key={option.value}
+              className={filter === option.value ? "active" : ""}
+              onClick={() => setFilter(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {regs.loading && <Skeleton rows={2} height={80} />}
       {regs.error && <p className="error">{regs.error}</p>}
       {regs.data?.length === 0 && (
         <Empty icon="📨" title="Заявок нет">
-          Игроки подают их командой <code>/register</code> — форму соберите на вкладке «Формы».
+          Игроки подают их командой <code>/register</code>. Проверьте, что форма открыта.
         </Empty>
       )}
 
@@ -79,43 +100,73 @@ export function RegistrationsTab({
               <div className="row" style={{ gap: 8 }}>
                 <span className={`badge ${STATUS_BADGE[r.status]}`}>{STATUS_LABEL[r.status]}</span>
                 <strong>{r.discord_username || r.discord_user_id}</strong>
+                {showForm && formTitle(r.form_id) && (
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    {formTitle(r.form_id)}
+                  </span>
+                )}
                 <span className="muted" style={{ fontSize: 13 }}>
                   {new Date(r.created_at).toLocaleString()}
                 </span>
               </div>
               {r.status === "pending" && (
                 <div>
-                  <button className="ghost" onClick={() => setApproving(r)}>
+                  <button className="ghost" onClick={() => setReview({ reg: r, approve: true })}>
                     Одобрить
                   </button>
-                  <button className="ghost danger" onClick={() => reject(r)}>
+                  <button
+                    className="ghost danger"
+                    onClick={() => setReview({ reg: r, approve: false })}
+                  >
                     Отклонить
                   </button>
                 </div>
               )}
             </div>
+
             <table style={{ marginTop: 8 }}>
               <tbody>
                 {Object.entries(r.answers).map(([k, v]) => (
                   <tr key={k}>
-                    <td className="muted" style={{ width: 200 }}>{k}</td>
+                    <td className="muted" style={{ width: 200 }}>
+                      {k}
+                    </td>
                     <td>{String(v)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+
+            {r.status !== "pending" && (
+              <div className="row" style={{ marginTop: 8, gap: "var(--s3)" }}>
+                {r.review_note && (
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    {r.status === "rejected" ? "Причина" : "Комментарий"}: {r.review_note}
+                  </span>
+                )}
+                {r.entity_id && (
+                  <Link
+                    to={`/projects/${projectId}/entities/${r.entity_id}`}
+                    style={{ fontSize: 13 }}
+                  >
+                    Сущность игрока →
+                  </Link>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
 
-      {approving && (
-        <ApproveModal
+      {review && (
+        <ReviewModal
           projectId={projectId}
-          reg={approving}
-          types={types.data ?? []}
-          onClose={() => setApproving(null)}
+          reg={review.reg}
+          approve={review.approve}
+          entities={entities.data ?? []}
+          onClose={() => setReview(null)}
           onDone={() => {
-            setApproving(null);
+            setReview(null);
             regs.reload();
             onChange?.();
           }}
@@ -125,34 +176,49 @@ export function RegistrationsTab({
   );
 }
 
-function ApproveModal({
+/** Решение по заявке: текст игроку и, при одобрении, привязка к сущности. */
+function ReviewModal({
   projectId,
   reg,
-  types,
+  approve,
+  entities,
   onClose,
   onDone,
 }: {
   projectId: number;
   reg: Registration;
-  types: EntityType[];
+  approve: boolean;
+  entities: Entity[];
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [createEntity, setCreateEntity] = useState(true);
-  const [entityLabel, setEntityLabel] = useState(reg.discord_username || "");
-  const [typeId, setTypeId] = useState<number | null>(null);
+  const toast = useToast();
+  const [note, setNote] = useState("");
+  const [notify, setNotify] = useState(true);
+  const [entityId, setEntityId] = useState<number | "">("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function confirm() {
+  async function submit() {
+    if (!approve && !note.trim()) {
+      setErr("Напишите причину — игрок получит её в личных сообщениях");
+      return;
+    }
     setBusy(true);
     setErr(null);
+    const body = {
+      note: note.trim(),
+      entity_id: approve && entityId !== "" ? Number(entityId) : null,
+      notify,
+    };
     try {
-      await api.approveRegistration(projectId, reg.id, {
-        create_entity: createEntity,
-        entity_label: entityLabel,
-        entity_type_id: typeId,
-      });
+      if (approve) await api.approveRegistration(projectId, reg.id, body);
+      else await api.rejectRegistration(projectId, reg.id, body);
+      toast.ok(
+        notify
+          ? `Заявка ${approve ? "одобрена" : "отклонена"} — бот напишет игроку`
+          : `Заявка ${approve ? "одобрена" : "отклонена"}`,
+      );
       onDone();
     } catch (e) {
       setErr(String(e));
@@ -160,47 +226,66 @@ function ApproveModal({
     }
   }
 
+  const who = reg.discord_username || reg.discord_user_id;
+
   return (
-    <Modal title="Одобрить заявку" onClose={onClose}>
+    <Modal title={approve ? `Одобрить заявку ${who}` : `Отклонить заявку ${who}`} onClose={onClose}>
       <div className="stack">
-        <label className="row" style={{ margin: 0 }}>
-          <input
-            type="checkbox"
-            checked={createEntity}
-            style={{ width: "auto", marginRight: 8 }}
-            onChange={(e) => setCreateEntity(e.target.checked)}
+        <div className="field">
+          <label>{approve ? "Напутствие игроку" : "Причина отказа"}</label>
+          <textarea
+            value={note}
+            autoFocus
+            placeholder={
+              approve
+                ? "Добро пожаловать! Ваша страна — на карте востока."
+                : "Например: анкета не соответствует сеттингу, попробуйте ещё раз."
+            }
+            onChange={(e) => setNote(e.target.value)}
           />
-          Создать сущность и закрепить за игроком (ответы формы → атрибуты)
-        </label>
-        {createEntity && (
-          <>
-            <div>
-              <label>Название сущности</label>
-              <input value={entityLabel} onChange={(e) => setEntityLabel(e.target.value)} />
-            </div>
-            <div>
-              <label>Тип</label>
-              <select
-                value={typeId ?? ""}
-                onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">— без типа —</option>
-                {types.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </>
+          <p className="hint" style={{ margin: 0 }}>
+            Бот отправит игроку личное сообщение с названием проекта, формы и этим текстом.
+          </p>
+        </div>
+
+        {approve && (
+          <div className="field">
+            <label>Привязать к сущности</label>
+            <select
+              value={entityId}
+              onChange={(e) => setEntityId(e.target.value ? Number(e.target.value) : "")}
+            >
+              <option value="">— не привязывать —</option>
+              {entities.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.label}
+                </option>
+              ))}
+            </select>
+            <p className="hint" style={{ margin: 0 }}>
+              Сущность из заявки больше не создаётся автоматически: анкета редко совпадает с
+              тем, что должно лежать в атрибутах. Заведите её на вкладке «Сущности» — или
+              выберите готовую, и игрок станет её участником.
+            </p>
+          </div>
         )}
+
+        <label className="check">
+          <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+          Написать игроку в личные сообщения
+        </label>
+
         {err && <div className="error">{err}</div>}
         <div className="row spread">
           <button className="ghost" onClick={onClose}>
             Отмена
           </button>
-          <button className="primary" disabled={busy} onClick={confirm}>
-            Одобрить
+          <button
+            className={approve ? "primary" : "primary danger"}
+            disabled={busy}
+            onClick={submit}
+          >
+            {approve ? "Одобрить" : "Отклонить"}
           </button>
         </div>
       </div>

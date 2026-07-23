@@ -26,6 +26,8 @@ import type {
   ProjectStats,
   Registration,
   RegistrationForm,
+  RegistrationReview,
+  SystemInfo,
   TemplateField,
   TemplatePages,
 } from "./types";
@@ -354,18 +356,23 @@ export const api = {
     request<void>("DELETE", `/projects/${pid}/forms/${fid}`),
 
   // registrations (заявки)
-  listRegistrations: (pid: number, status?: string) =>
-    request<Registration[]>(
+  listRegistrations: (pid: number, status?: string, formId?: number) => {
+    const query = new URLSearchParams();
+    if (status) query.set("status", status);
+    if (formId != null) query.set("form_id", String(formId));
+    const tail = query.toString();
+    return request<Registration[]>(
       "GET",
-      `/projects/${pid}/registrations${status ? `?status=${status}` : ""}`,
-    ),
-  approveRegistration: (
-    pid: number,
-    rid: number,
-    data: { create_entity: boolean; entity_label: string; entity_type_id: number | null },
-  ) => request<Registration>("POST", `/projects/${pid}/registrations/${rid}/approve`, data),
-  rejectRegistration: (pid: number, rid: number) =>
-    request<Registration>("POST", `/projects/${pid}/registrations/${rid}/reject`),
+      `/projects/${pid}/registrations${tail ? `?${tail}` : ""}`,
+    );
+  },
+  approveRegistration: (pid: number, rid: number, data: RegistrationReview) =>
+    request<Registration>("POST", `/projects/${pid}/registrations/${rid}/approve`, data),
+  rejectRegistration: (pid: number, rid: number, data: RegistrationReview) =>
+    request<Registration>("POST", `/projects/${pid}/registrations/${rid}/reject`, data),
+
+  // настройки, от которых зависят картинки в Discord
+  systemInfo: () => request<SystemInfo>("GET", "/system/info"),
 
   // notifications
   listNotifications: (pid: number, unreadOnly = false) =>

@@ -164,6 +164,51 @@ async def _before_deliver() -> None:
     await bot.wait_until_ready()
 
 
+@tasks.loop(seconds=config.poll_seconds)
+async def deliver_dms() -> None:
+    """Отправить игрокам решения по заявкам в личные сообщения."""
+    try:
+        messages = await api.pending_dms()
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось получить очередь личных сообщений")
+        return
+
+    for dm in messages:
+        error = ""
+        try:
+            user = bot.get_user(int(dm["player_id"])) or await bot.fetch_user(int(dm["player_id"]))
+            embed = discord.Embed(
+                title=dm.get("title") or discord.utils.MISSING,
+                description=dm.get("body") or discord.utils.MISSING,
+            )
+            color = dm.get("color") or ""
+            if color:
+                try:
+                    embed.colour = discord.Colour(int(color.lstrip("#"), 16))
+                except ValueError:
+                    pass
+            await user.send(embed=embed)
+        except discord.Forbidden:
+            # Самый частый случай: у игрока закрыты ЛС от участников сервера.
+            error = "Игрок закрыл личные сообщения"
+        except discord.NotFound:
+            error = "Пользователь Discord не найден"
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось отправить ЛС %s", dm["id"])
+            error = str(exc)[:200] or "Неизвестная ошибка"
+        try:
+            await api.mark_dm_result(dm["id"], error)
+        except Exception:  # noqa: BLE001
+            # Отметку потеряли — сообщение уйдёт ещё раз. Дубль решения по
+            # заявке неприятен, но молчание вместо ответа мастера хуже.
+            logger.exception("Не удалось отметить ЛС %s", dm["id"])
+
+
+@deliver_dms.before_loop
+async def _before_dms() -> None:
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def on_ready() -> None:
     try:
@@ -173,6 +218,8 @@ async def on_ready() -> None:
         logger.exception("Не удалось синхронизировать команды")
     if not deliver_posts.is_running():
         deliver_posts.start()
+    if not deliver_dms.is_running():
+        deliver_dms.start()
     if not refresh_proxy_channels.is_running():
         refresh_proxy_channels.start()
     logger.info("Бот запущен как %s", bot.user)

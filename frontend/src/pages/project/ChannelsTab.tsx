@@ -3,7 +3,7 @@ import { api } from "../../api";
 import { useAsync } from "../../hooks";
 import { Modal } from "../../components/Modal";
 import { useConfirm } from "../../components/Feedback";
-import type { CategoryNode, ChannelNode, Entity, ChannelTree } from "../../types";
+import type { CategoryNode, ChannelNode, Entity, ChannelTree, SystemInfo } from "../../types";
 
 const TYPE_ICON: Record<string, string> = {
   text: "#",
@@ -21,6 +21,8 @@ export function ChannelsTab({ projectId }: { projectId: number }) {
   const [creatingIn, setCreatingIn] = useState<CategoryNode | null>(null);
   const [access, setAccess] = useState<ChannelNode | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Авто-подмена показывает аватарку сущности только через публичный адрес.
+  const system = useAsync<SystemInfo>(() => api.systemInfo(), []);
 
   async function removeChannel(ch: ChannelNode) {
     const ok = await confirm({
@@ -51,6 +53,14 @@ export function ChannelsTab({ projectId }: { projectId: number }) {
         Каналы не хранятся в дашборде — состав категорий всегда берётся с сервера.
         Категории проекта настраиваются во вкладке «Настройки».
       </p>
+      {system.data?.uploads_public === false && (
+        <div className="error">
+          У backend не задан <code>PUBLIC_BASE_URL</code> — в каналах с авто-подменой сообщения
+          уйдут с аватаркой вебхука по умолчанию: Discord не может скачать загруженные
+          картинки сущностей по внутреннему адресу. Задайте переменную (например{" "}
+          <code>https://ваш-домен/api</code>) или указывайте сущностям внешние ссылки.
+        </div>
+      )}
 
       {tree.loading && <p className="muted">Загрузка…</p>}
       {tree.data?.error && <div className="error">{tree.data.error}</div>}

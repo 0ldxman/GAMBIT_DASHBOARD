@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { api } from "../../api";
 import { useAsync } from "../../hooks";
+import { Modal } from "../../components/Modal";
 import { PlayerBadge } from "../../components/PlayerBadge";
 import { useConfirm, useToast } from "../../components/Feedback";
 import type { GuildPlayer, Member } from "../../types";
@@ -33,6 +34,9 @@ export function MembersSection({
   const [search, setSearch] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Выбор игрока живёт в модалке: на экране сущности это редкое действие,
+  // а список участников сервера занимал полкарточки постоянно.
+  const [adding, setAdding] = useState(false);
 
   const hasPrimary = (members.data ?? []).some((m) => m.is_primary);
 
@@ -43,8 +47,6 @@ export function MembersSection({
       (p) => !taken.has(p.player_id) && (!q || p.name.toLowerCase().includes(q)),
     );
   }, [players.data, search, members.data]);
-
-  const selected = filtered.find((p) => p.player_id === playerId);
 
   function refresh() {
     members.reload();
@@ -67,6 +69,7 @@ export function MembersSection({
       setRole("");
       setPrimary(false);
       setSearch("");
+      setAdding(false);
       refresh();
     } catch (e) {
       setErr(String(e));
@@ -138,7 +141,81 @@ export function MembersSection({
         </div>
       ))}
 
-      <label style={{ marginTop: 16 }}>Добавить игрока</label>
+      <div className="row" style={{ marginTop: 16 }}>
+        <button className="primary" onClick={() => setAdding(true)}>
+          + Добавить игрока
+        </button>
+        {!hasPrimary && (members.data?.length ?? 0) === 0 && (
+          <span className="muted" style={{ fontSize: 13 }}>
+            Первый игрок станет основным автоматически.
+          </span>
+        )}
+      </div>
+
+      {adding && (
+        <Modal title="Добавить игрока" onClose={() => setAdding(false)}>
+          <div className="stack">
+            <AddMemberBody
+              players={players}
+              filtered={filtered}
+              search={search}
+              setSearch={setSearch}
+              playerId={playerId}
+              setPlayerId={setPlayerId}
+              role={role}
+              setRole={setRole}
+              primary={primary}
+              setPrimary={setPrimary}
+              hasPrimary={hasPrimary}
+              busy={busy}
+              err={err}
+              onAdd={add}
+              onClose={() => setAdding(false)}
+            />
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+/** Выбор игрока сервера: поиск, список и роль — содержимое модалки. */
+function AddMemberBody({
+  players,
+  filtered,
+  search,
+  setSearch,
+  playerId,
+  setPlayerId,
+  role,
+  setRole,
+  primary,
+  setPrimary,
+  hasPrimary,
+  busy,
+  err,
+  onAdd,
+  onClose,
+}: {
+  players: { data: GuildPlayer[] | null; loading: boolean; error: string | null };
+  filtered: GuildPlayer[];
+  search: string;
+  setSearch: (v: string) => void;
+  playerId: string;
+  setPlayerId: (v: string) => void;
+  role: string;
+  setRole: (v: string) => void;
+  primary: boolean;
+  setPrimary: (v: boolean) => void;
+  hasPrimary: boolean;
+  busy: boolean;
+  err: string | null;
+  onAdd: () => void;
+  onClose: () => void;
+}) {
+  const selected = filtered.find((p) => p.player_id === playerId);
+  return (
+    <>
       {players.error && (
         <div className="stack">
           <div className="error">{players.error}</div>
@@ -199,9 +276,6 @@ export function MembersSection({
               />
               Основной игрок
             </label>
-            <button className="primary" onClick={add} disabled={busy || !playerId}>
-              Добавить{selected ? ` ${selected.name}` : ""}
-            </button>
           </div>
           {!hasPrimary && (
             <p className="muted" style={{ fontSize: 13 }}>
@@ -211,6 +285,14 @@ export function MembersSection({
         </>
       )}
       {err && <div className="error">{err}</div>}
-    </section>
+      <div className="row spread">
+        <button className="ghost" onClick={onClose}>
+          Отмена
+        </button>
+        <button className="primary" onClick={onAdd} disabled={busy || !playerId}>
+          Добавить{selected ? ` ${selected.name}` : ""}
+        </button>
+      </div>
+    </>
   );
 }

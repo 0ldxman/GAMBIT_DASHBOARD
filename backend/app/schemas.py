@@ -643,16 +643,26 @@ class RegistrationOut(ORMModel):
     answers: dict[str, Any]
     status: RegistrationStatus
     entity_id: Optional[int]
+    review_note: str = ""
     reviewed_by: str
     reviewed_at: Optional[datetime]
     created_at: datetime
 
 
 class RegistrationReview(BaseModel):
-    # При approve можно сразу создать сущность указанного типа и закрепить игрока.
-    create_entity: bool = False
-    entity_label: str = ""
-    entity_type_id: Optional[int] = None
+    """Решение мастера по заявке.
+
+    Сущность при одобрении НЕ создаётся: заявка — это анкета, а сущность
+    заводится отдельно, со своим типом, атрибутами и описанием. Готовую можно
+    указать в `entity_id` — игрок станет её участником.
+    """
+
+    # Текст, который уйдёт игроку в ЛС: причина отказа или напутствие.
+    note: str = ""
+    # Привязать игрока к уже существующей сущности.
+    entity_id: Optional[int] = None
+    # Не писать игроку (решение сообщат иначе).
+    notify: bool = True
 
 
 # ---------- notification ----------
@@ -759,6 +769,35 @@ class ProxyChoiceIn(BaseModel):
     discord_channel_id: DiscordId
     player_id: DiscordId
     entity_id: int
+
+
+class PendingDmOut(BaseModel):
+    """Неотправленное личное сообщение игроку — бот забирает опросом."""
+
+    id: int
+    project_id: int
+    player_id: DiscordId
+    title: str
+    body: str
+    color: str
+
+
+class DmResultIn(BaseModel):
+    """Итог отправки. Пустая ошибка — доставлено."""
+
+    error: str = ""
+
+
+class SystemInfoOut(BaseModel):
+    """Что мешает картинкам доехать до Discord — проверка настроек.
+
+    Discord скачивает аватарки и картинки эмбедов сам, поэтому внутренний путь
+    `/uploads/...` ему бесполезен: без `PUBLIC_BASE_URL` загруженные файлы
+    молча не подставляются. Дашборд по этим полям показывает предупреждение.
+    """
+
+    public_base_url: str = ""
+    uploads_public: bool = False
 
 
 class PendingPostOut(BaseModel):

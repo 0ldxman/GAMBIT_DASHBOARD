@@ -3,11 +3,15 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from fastapi import Depends
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.routers.internal import public_base
+from app.schemas import SystemInfoOut
+from app.security import require_master
 from app.routers import auth
 from app.routers import channels
 from app.routers import discord
@@ -77,6 +81,23 @@ except OSError:
 @app.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get(
+    "/system/info",
+    tags=["meta"],
+    response_model=SystemInfoOut,
+    dependencies=[Depends(require_master)],
+)
+async def system_info() -> SystemInfoOut:
+    """Настройки, от которых зависит, доедут ли картинки до Discord.
+
+    Дашборд по этому ответу предупреждает мастера: без PUBLIC_BASE_URL
+    загруженный файл останется внутренним путём, и Discord подставит аватарку
+    по умолчанию — молча, без единой ошибки.
+    """
+    base = public_base()
+    return SystemInfoOut(public_base_url=base, uploads_public=bool(base))
 
 
 @app.get("/health/config", tags=["meta"])

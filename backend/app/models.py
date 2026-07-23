@@ -441,15 +441,40 @@ class Registration(Base):
         SAEnum(RegistrationStatus, name="registration_status"),
         default=RegistrationStatus.pending,
     )
-    # Сущность, созданная/привязанная при одобрении.
+    # Сущность, к которой мастер привязал игрока при одобрении (необязательно).
     entity_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("entity.id", ondelete="SET NULL"), nullable=True
     )
+    # Что мастер написал игроку: причина отказа или напутствие при одобрении.
+    review_note: Mapped[str] = mapped_column(Text, default="")
     reviewed_by: Mapped[str] = mapped_column(String(120), default="")
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     form: Mapped[RegistrationForm] = relationship(back_populates="registrations")
+
+
+class DirectMessage(Base):
+    """Личное сообщение игроку, которое должен отправить бот.
+
+    Очередь, а не прямой вызов: дашборд с Discord не разговаривает, у него нет
+    токена. Бот забирает неотправленные строки тем же опросом, что и верды, и
+    помечает их доставленными. Неудача (закрытые ЛС) не теряется — остаётся
+    текст ошибки, и мастер видит, что игрок не получил решение.
+    """
+
+    __tablename__ = "direct_message"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("project.id", ondelete="CASCADE"))
+    player_id: Mapped[int] = mapped_column(BigInteger)  # Discord user id
+    title: Mapped[str] = mapped_column(String(200), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    # Цвет полосы эмбеда: решение по заявке читается с одного взгляда.
+    color: Mapped[str] = mapped_column(String(7), default="")
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Notification(Base):

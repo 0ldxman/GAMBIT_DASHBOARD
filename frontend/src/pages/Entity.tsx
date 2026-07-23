@@ -21,6 +21,7 @@ import type {
   EntityType,
   Project,
   Relation,
+  SystemInfo,
   TemplatePages,
 } from "../types";
 import { MembersSection } from "./entity/MembersSection";
@@ -45,6 +46,11 @@ function PictureField({
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
+  // Загруженный файл Discord скачивает сам, и без публичного адреса backend
+  // аватарка молча не подставится — предупреждаем до, а не после.
+  const system = useAsync<SystemInfo>(() => api.systemInfo(), []);
+  const uploaded = value.startsWith("/");
+  const brokenUpload = uploaded && system.data?.uploads_public === false;
 
   async function upload(files: FileList | null) {
     const file = files?.[0];
@@ -65,10 +71,17 @@ function PictureField({
     <div className="field">
       <label>Картинка сущности</label>
       <Hint id="entity-picture">
-        Аватарка сущности в карточке и в сообщениях, отправленных от её лица. Загруженный файл
-        Discord увидит, только если у backend задан <code>PUBLIC_BASE_URL</code>; иначе надёжнее
-        вставить внешнюю ссылку.
+        Аватарка сущности в карточке и в сообщениях, отправленных от её лица — и командой{" "}
+        <code>/say</code>, и авто-подменой в каналах.
       </Hint>
+      {brokenUpload && (
+        <div className="error" style={{ marginBottom: "var(--s2)" }}>
+          У backend не задан <code>PUBLIC_BASE_URL</code>, поэтому Discord не сможет скачать
+          загруженный файл — сообщения от лица сущности уйдут с аватаркой по умолчанию. Задайте
+          переменную (например <code>https://ваш-домен/api</code>) или вставьте сюда внешнюю
+          ссылку на картинку.
+        </div>
+      )}
       <input
         ref={fileRef}
         type="file"

@@ -330,9 +330,29 @@ export interface Registration {
   answers: Record<string, unknown>;
   status: RegistrationStatus;
   entity_id: number | null;
+  /** Что мастер написал игроку: причина отказа или напутствие. */
+  review_note: string;
   reviewed_by: string;
   reviewed_at: string | null;
   created_at: string;
+}
+
+/**
+ * Решение мастера по заявке.
+ *
+ * Сущность при одобрении не создаётся — можно лишь привязать готовую
+ * (`entity_id`). `note` уходит игроку в ЛС, `notify: false` отменяет письмо.
+ */
+export interface RegistrationReview {
+  note: string;
+  entity_id?: number | null;
+  notify: boolean;
+}
+
+/** Настройки backend, от которых зависит, увидит ли Discord картинки. */
+export interface SystemInfo {
+  public_base_url: string;
+  uploads_public: boolean;
 }
 
 export type NotificationType = "ping" | "registration" | "system";

@@ -1,5 +1,9 @@
 """Ручки для Discord-бота. Защита — общий секрет X-Internal-Key (не мастерский токен)."""
 
+import logging
+from datetime import datetime
+from datetime import timezone
+
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -13,6 +17,7 @@ from app.database import get_db
 from app.descriptions import render_entity_card
 from app.models import ChannelSetting
 from app.models import ChannelWebhook
+from app.models import DirectMessage
 from app.models import Entity
 from app.models import EntityChannel
 from app.models import Notification
@@ -27,7 +32,9 @@ from app.models import RegistrationForm
 from app.resolve import project_for_channel
 from app.schemas import AboutProjectOut
 from app.schemas import DeliveredIn
+from app.schemas import DmResultIn
 from app.schemas import MeInfoOut
+from app.schemas import PendingDmOut
 from app.schemas import PendingPostOut
 from app.schemas import PingIn
 from app.schemas import ProjectBriefOut
@@ -40,7 +47,21 @@ from app.schemas import WebhookIn
 from app.schemas import WebhookOut
 from app.security import require_internal
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(require_internal)])
+
+
+def public_base() -> str:
+    """PUBLIC_BASE_URL без хвостового слэша и обязательно со схемой.
+
+    Адрес без схемы (`example.com/api`) Discord не скачает, а ошибку покажет
+    молчанием — поэтому чиним такой адрес здесь, а не ждём от мастера точности.
+    """
+    base = get_settings().public_base_url.strip().rstrip("/")
+    if base and not base.startswith(("http://", "https://")):
+        base = f"https://{base}"
+    return base
 
 
 def public_url(path: str) -> str:
@@ -48,14 +69,22 @@ def public_url(path: str) -> str:
 
     Аватарку вебхука Discord скачивает сам, поэтому внутренний путь /uploads/...
     ему бесполезен. Без PUBLIC_BASE_URL возвращаем пусто — лучше аватарка
-    по умолчанию, чем битая ссылка.
+    по умолчанию, чем битая ссылка. Дашборд про это предупреждает: см.
+    ручку `/system/info`.
     """
     if not path:
         return ""
     if path.startswith(("http://", "https://")):
         return path
-    base = get_settings().public_base_url.rstrip("/")
-    return f"{base}{path}" if base else ""
+    base = public_base()
+    if not base:
+        logger.warning(
+            "PUBLIC_BASE_URL не задан — картинка %s не уйдёт в Discord "
+            "(аватарки сущностей и картинки эмбедов будут по умолчанию)",
+            path,
+        )
+        return ""
+    return f"{base}{path}"
 
 
 async def _resolve_project(
@@ -96,6 +125,39 @@ async def mark_delivered(
     if post is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Верд не найден")
     post.published_message_id = body.message_id
+    await db.commit()
+    return {"status": "ok"}
+
+
+# ---------- личные сообщения игрокам ----------
+@router.get("/pending-dms", response_model=list[PendingDmOut])
+async def pending_dms(db: AsyncSession = Depends(get_db)) -> list[DirectMessage]:
+    """Что бот ещё не отправил игрокам в ЛС (решения по заявкам)."""
+    result = await db.execute(
+        select(DirectMessage)
+        .where(DirectMessage.sent_at.is_(None), DirectMessage.error == "")
+        .order_by(DirectMessage.created_at)
+        .limit(25)
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/dms/{dm_id}/result")
+async def mark_dm_result(
+    dm_id: int, body: DmResultIn, db: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    """Отметить отправку. Ошибка остаётся текстом — обычно ЛС закрыты.
+
+    Строка с ошибкой из очереди выбывает: повторять бессмысленно, а мастеру
+    видно, что игроку решение не дошло.
+    """
+    dm = await db.get(DirectMessage, dm_id)
+    if dm is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщение не найдено")
+    if body.error:
+        dm.error = body.error[:500]
+    else:
+        dm.sent_at = datetime.now(timezone.utc)
     await db.commit()
     return {"status": "ok"}
 
