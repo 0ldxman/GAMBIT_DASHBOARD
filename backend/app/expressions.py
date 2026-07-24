@@ -1,15 +1,24 @@
 """Безопасное вычисление арифметики над атрибутами сущности.
 
-Мастер пишет в правке верда или в вычисляемом поле типа выражение вида:
+Мастер пишет в правке верда, в вычисляемом поле типа или в правиле хода
+выражение вида:
     ВС.людские_ресурсы - 10
     политика.поддержка_партии_власти + 100
     экономика.ВВП * 1.05
     min(запасы.еда + 50, 1000)
+    в_пределах(казна.запас - расход, 0, 999999)   — не ниже нуля
+    если(стабильность > 50, база, база / 2)        — ветвление
     длина(духи)                     — сколько элементов в списке
+    количество(связи.союзник)       — сколько союзников
     сумма(гигаструктуры, "мощь")    — сумма поля по списку объектов
+    сумма(связи.союзник, "выч.мощь") — показатель соседей по связи
 
 Пути к атрибутам разыменовываются через точку. НЕ используется eval():
 выражение разбирается в AST и обходится с белым списком узлов.
+
+Логика (сравнения `> < >= <= == !=`, `and`/`or`/`not`, функция `если`) нужна
+для игровых правил; сравнивать можно числа и строки, но ИТОГ выражения обязан
+быть числом — bool живёт только внутри условий.
 """
 
 from __future__ import annotations
@@ -28,6 +37,21 @@ _BIN_OPS = {
     ast.Pow: operator.pow,
 }
 _UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_COMPARE_OPS = {
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+}
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    """Зажать в диапазон [low, high] — «запас не ниже нуля» и т.п."""
+    return min(max(value, low), high)
+
+
 _FUNCS = {
     "min": min,
     "max": max,
@@ -35,10 +59,17 @@ _FUNCS = {
     "round": round,
     "int": int,
     "float": float,
+    # Русские алиасы и удобные обёртки для кураторов.
+    "окр": round,
+    "в_пределах": _clamp,
 }
 # Функции над списками. Их аргументы НЕ приводятся к числу: на вход идёт сам
-# список (и, возможно, имя поля строкой).
-_LIST_FUNCS = ("длина", "сумма")
+# список (и, возможно, имя поля строкой). `количество` — алиас `длина`, читается
+# лучше для списков сущностей.
+_LIST_FUNCS = ("длина", "количество", "сумма", "среднее", "максимум", "минимум")
+# Ленивая функция: ветви вычисляются по условию, а не все сразу — иначе
+# `если(x>0, 1/x, 0)` падал бы на невыбранной ветке.
+_LAZY_FUNCS = ("если",)
 # Защита от выражений вида 9**9**9, вешающих процесс.
 _MAX_POW = 1_000_000
 
@@ -99,33 +130,77 @@ def _as_list(value: Any, func: str) -> list[Any]:
     raise ExpressionError(f"«{func}» ожидает список, получено: {value!r}")
 
 
+def _dig_field(item: Any, field: str) -> Any:
+    """Поле элемента по dot-path: `"выч.мощь"`, а не только `"мощь"`.
+
+    Нужно для агрегатов по связям — у карточки соседа показатель лежит в ветке
+    формул (`выч.мощь`), а не плоским ключом.
+    """
+    node: Any = item
+    for part in field.split("."):
+        if not isinstance(node, dict) or part not in node:
+            raise ExpressionError(f"В элементе списка нет поля «{field}»: {item!r}")
+        node = node[part]
+    return node
+
+
+def _numbers(items: list[Any], field: str | None, func: str) -> list[float | int]:
+    """Числовые значения элементов (по полю, если задано) для агрегатов."""
+    values: list[float | int] = []
+    for item in items:
+        value = _dig_field(item, field) if field is not None else item
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ExpressionError(f"«{func}»: не число — {value!r}")
+        values.append(value)
+    return values
+
+
 def _call_list_func(name: str, args: list[Any]) -> float | int:
-    if name == "длина":
+    if name in ("длина", "количество"):
         if len(args) != 1:
-            raise ExpressionError("«длина» принимает один аргумент")
+            raise ExpressionError(f"«{name}» принимает один аргумент")
         value = args[0]
         if isinstance(value, (list, dict, str)):
             return len(value)
-        raise ExpressionError(f"«длина» ожидает список или строку, получено: {value!r}")
+        raise ExpressionError(f"«{name}» ожидает список или строку, получено: {value!r}")
 
-    # сумма(список) либо сумма(список_объектов, "поле")
+    # сумма/среднее/максимум/минимум: (список) или (список_объектов, "поле.по.точке")
     if not 1 <= len(args) <= 2:
-        raise ExpressionError("«сумма» принимает список и, необязательно, имя поля")
-    items = _as_list(args[0], "сумма")
+        raise ExpressionError(f"«{name}» принимает список и, необязательно, имя поля")
+    items = _as_list(args[0], name)
     field = args[1] if len(args) == 2 else None
     if field is not None and not isinstance(field, str):
-        raise ExpressionError("Имя поля для «сумма» задаётся строкой в кавычках")
+        raise ExpressionError(f"Имя поля для «{name}» задаётся строкой в кавычках")
 
-    total: float | int = 0
-    for item in items:
-        if field is not None:
-            if not isinstance(item, dict) or field not in item:
-                raise ExpressionError(f"В элементе списка нет поля «{field}»: {item!r}")
-            item = item[field]
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            raise ExpressionError(f"Не число в списке: {item!r}")
-        total += item
-    return total
+    values = _numbers(items, field, name)
+    if name == "сумма":
+        return sum(values)
+    if not values:
+        raise ExpressionError(f"«{name}» по пустому списку — нечего считать")
+    if name == "среднее":
+        return sum(values) / len(values)
+    if name == "максимум":
+        return max(values)
+    return min(values)  # минимум
+
+
+def _value(node: ast.AST, attributes: dict[str, Any]) -> Any:
+    """Операнд сравнения: число ИЛИ строка (`режим == "война"`).
+
+    В отличие от `_eval`, не приводит к числу — сравнивать строки допустимо.
+    Арифметика внутри сравнения (`казна.запас - 5 > 0`) уходит в `_eval` и
+    остаётся числовой.
+    """
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float, str)):
+            raise ExpressionError(f"Недопустимая константа: {node.value!r}")
+        return node.value
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        path = _dotted_name(node)
+        if path is None:
+            raise ExpressionError("Не удалось разобрать путь к атрибуту")
+        return _lookup(path, attributes)
+    return _eval(node, attributes)
 
 
 def _eval(node: ast.AST, attributes: dict[str, Any]) -> Any:
@@ -143,6 +218,32 @@ def _eval(node: ast.AST, attributes: dict[str, Any]) -> Any:
             raise ExpressionError("Не удалось разобрать путь к атрибуту")
         return _to_number(_lookup(path, attributes), path)
 
+    if isinstance(node, ast.Compare):
+        left = _value(node.left, attributes)
+        for op, right_node in zip(node.ops, node.comparators):
+            func = _COMPARE_OPS.get(type(op))
+            if func is None:
+                raise ExpressionError("Недопустимое сравнение")
+            right = _value(right_node, attributes)
+            try:
+                ok = func(left, right)
+            except TypeError:
+                raise ExpressionError(f"Нельзя сравнить {left!r} и {right!r}")
+            if not ok:
+                return False
+            left = right  # цепочка a < b < c
+        return True
+
+    if isinstance(node, ast.BoolOp):
+        is_and = isinstance(node.op, ast.And)
+        for operand in node.values:
+            truthy = bool(_eval(operand, attributes))
+            if is_and and not truthy:
+                return False
+            if not is_and and truthy:
+                return True
+        return is_and
+
     if isinstance(node, ast.BinOp):
         op = _BIN_OPS.get(type(node.op))
         if op is None:
@@ -159,6 +260,8 @@ def _eval(node: ast.AST, attributes: dict[str, Any]) -> Any:
         return result
 
     if isinstance(node, ast.UnaryOp):
+        if isinstance(node.op, ast.Not):
+            return not bool(_eval(node.operand, attributes))
         op = _UNARY_OPS.get(type(node.op))
         if op is None:
             raise ExpressionError("Недопустимая унарная операция")
@@ -168,6 +271,13 @@ def _eval(node: ast.AST, attributes: dict[str, Any]) -> Any:
         name = node.func.id if isinstance(node.func, ast.Name) else None
         if node.keywords:
             raise ExpressionError("Именованные аргументы не поддерживаются")
+        if name in _LAZY_FUNCS:  # если(условие, то, иначе)
+            if len(node.args) != 3:
+                raise ExpressionError(
+                    "«если» принимает три аргумента: если(условие, то, иначе)"
+                )
+            chosen = node.args[1] if bool(_eval(node.args[0], attributes)) else node.args[2]
+            return _eval(chosen, attributes)
         if name in _LIST_FUNCS:
             return _call_list_func(name, [_raw(a, attributes) for a in node.args])
         func = _FUNCS.get(name or "")
@@ -201,17 +311,33 @@ def _check_node(node: ast.AST) -> None:
         return
 
     if isinstance(node, ast.UnaryOp):
-        if type(node.op) not in _UNARY_OPS:
+        if not isinstance(node.op, ast.Not) and type(node.op) not in _UNARY_OPS:
             raise ExpressionError("Недопустимая унарная операция")
         _check_node(node.operand)
+        return
+
+    if isinstance(node, ast.Compare):
+        for op in node.ops:
+            if type(op) not in _COMPARE_OPS:
+                raise ExpressionError("Недопустимое сравнение")
+        _check_node(node.left)
+        for comparator in node.comparators:
+            _check_node(comparator)
+        return
+
+    if isinstance(node, ast.BoolOp):
+        for operand in node.values:
+            _check_node(operand)
         return
 
     if isinstance(node, ast.Call):
         name = node.func.id if isinstance(node.func, ast.Name) else None
         if node.keywords:
             raise ExpressionError("Именованные аргументы не поддерживаются")
-        if name not in _FUNCS and name not in _LIST_FUNCS:
+        if name not in _FUNCS and name not in _LIST_FUNCS and name not in _LAZY_FUNCS:
             raise _bad_func(name)
+        if name in _LAZY_FUNCS and len(node.args) != 3:
+            raise ExpressionError("«если» принимает три аргумента: если(условие, то, иначе)")
         for arg in node.args:
             _check_node(arg)
         return

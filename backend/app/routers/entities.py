@@ -13,11 +13,18 @@ from sqlalchemy.orm import selectinload
 
 from app.access import sync_channel_access
 from app.access import sync_entity_channels
+from app.computed import compute
 from app.computed import merge
+from app.computed import template_extra
 from app.computed import validate as validate_computed
 from app.database import get_db
 from app.descriptions import entity_computed
+from app.descriptions import entity_extras
+from app.descriptions import entity_fields
 from app.descriptions import render_entity_card
+from app.expressions import ExpressionError
+from app.expressions import dependencies
+from app.expressions import evaluate
 from app.discord_api import DiscordError
 from app.discord_api import get_guild_member
 from app.models import Entity
@@ -28,6 +35,9 @@ from app.models import EntityType
 from app.models import Project
 from app.routers.projects import get_project_or_404
 from app.schemas import ComputedValueOut
+from app.schemas import ExprEvalOut
+from app.schemas import ExprEvalRef
+from app.schemas import ExprEvalRequest
 from app.schemas import EntityChannelCreate
 from app.schemas import EntityChannelOut
 from app.schemas import EntityChannelUpdate
@@ -45,6 +55,7 @@ from app.schemas import TemplatePagesResponse
 from app.security import require_master
 from app.templating import PAGE_SOFT_LIMIT
 from app.templating import format_number
+from app.turn_engine import validate_turn_rules
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +102,18 @@ async def _check_computed(
         )
 
 
+def _check_turn_rules(turn_rules: list | None) -> None:
+    """Проверить собственные правила хода сущности перед сохранением."""
+    if not turn_rules:
+        return
+    err = validate_turn_rules(turn_rules)
+    if err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Правила хода: {err}",
+        )
+
+
 async def _resolve_profile(project: Project, player_id: int) -> tuple[str, str]:
     """Имя и аватар игрока из Discord. Профиль — не критичен, ошибку глушим."""
     if not project.guild_id:
@@ -123,6 +146,7 @@ async def create_entity(
     await get_project_or_404(project_id, db)
     data = body.model_dump()
     await _check_computed(project_id, data.get("type_id"), data.get("computed"), db)
+    _check_turn_rules(data.get("turn_rules"))
 
     # Пустые атрибуты + указанный тип → начинаем с заготовки типа. Копируем
     # глубоко, иначе все сущности типа делили бы один и тот же вложенный объект.
@@ -158,6 +182,8 @@ async def update_entity(
             data.get("computed", entity.computed),
             db,
         )
+    if "turn_rules" in data:
+        _check_turn_rules(data["turn_rules"])
     for field, value in data.items():
         setattr(entity, field, value)
     await db.commit()
@@ -216,6 +242,49 @@ async def render_entity(
             for item in values
         ],
     )
+
+
+def _context_lookup(context: dict, path: str) -> object:
+    node: object = context
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+@router.post("/{entity_id}/eval", response_model=ExprEvalOut)
+async def eval_expression(
+    project_id: int,
+    entity_id: int,
+    body: ExprEvalRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ExprEvalOut:
+    """Посчитать выражение на данных этой сущности — живой предпросмотр формулы.
+
+    Даёт куратору мгновенную обратную связь при наборе формулы или правила хода:
+    результат и значения путей, на которые выражение ссылается. Ничего не
+    сохраняет, атрибуты не меняет.
+    """
+    entity = await get_entity_or_404(project_id, entity_id, db)
+    extras = await entity_extras(entity, db)
+    tree, _ = compute(await entity_fields(entity, db), entity.attributes, extras)
+    attributes = entity.attributes if isinstance(entity.attributes, dict) else {}
+    context: dict = {**attributes, **template_extra(tree, attributes)}
+    for key, value in extras.items():
+        context.setdefault(key, value)
+
+    refs: list[ExprEvalRef] = []
+    for path in dependencies(body.expr):
+        found = _context_lookup(context, path)
+        if found is not None and not isinstance(found, (dict, list)):
+            refs.append(ExprEvalRef(path=path, text=format_number(found)))
+
+    try:
+        value = evaluate(body.expr, context)
+    except ExpressionError as exc:
+        return ExprEvalOut(error=str(exc), refs=refs)
+    return ExprEvalOut(value=format_number(value), refs=refs)
 
 
 # ---------- участники ----------

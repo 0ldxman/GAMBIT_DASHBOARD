@@ -9,6 +9,7 @@ from app.computed import compute
 from app.computed import merge
 from app.computed import validate as validate_computed
 from app.database import get_db
+from app.turn_engine import validate_turn_rules
 from app.descriptions import SAMPLE_EXTRAS
 from app.descriptions import build_extras
 from app.descriptions import entity_extras
@@ -51,6 +52,13 @@ def _prepare(data: dict) -> dict:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Вычисляемые поля: {err}",
+            )
+    if data.get("turn_rules") is not None:
+        err = validate_turn_rules(data["turn_rules"])
+        if err:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Правила хода: {err}",
             )
     for index, page in enumerate(data.get("description_pages") or [], start=1):
         err = validate_template(page)
@@ -113,7 +121,15 @@ async def preview_pages(
         [field.model_dump() for field in body.computed],
         [field.model_dump() for field in body.computed_own],
     )
-    tree, values = compute(fields, body.attributes)
+    # Связи нужны и формулам (`сумма(связи.союзник, …)`), поэтому берём их до
+    # расчёта: у настоящей сущности — реальные, в редакторе типа — пример.
+    extras = SAMPLE_EXTRAS
+    if body.entity_id is not None:
+        entity = await db.get(Entity, body.entity_id)
+        if entity is not None and entity.project_id == project_id:
+            extras = await entity_extras(entity, db)
+
+    tree, values = compute(fields, body.attributes, extras)
     computed = [
         ComputedValueOut(
             path=item.path,
@@ -133,11 +149,6 @@ async def preview_pages(
                 error=f"Страница {index}: {err}",
                 computed=computed,
             )
-    extras = SAMPLE_EXTRAS
-    if body.entity_id is not None:
-        entity = await db.get(Entity, body.entity_id)
-        if entity is not None and entity.project_id == project_id:
-            extras = await entity_extras(entity, db)
 
     rendered = render_pages(
         body.pages,

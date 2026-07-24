@@ -7,11 +7,12 @@ import { PagesEditor, pageColors, pageTexts, toPages } from "../components/Pages
 import type { Page } from "../components/PagesEditor";
 import { buildSuggestions } from "../components/suggestions";
 import { ComputedEditor } from "../components/ComputedEditor";
+import { TurnRulesEditor } from "../components/TurnRulesEditor";
 import { EntityCard } from "../components/EntityCard";
 import { Hint } from "../components/Hint";
 import { useWideLayout } from "../components/Layout";
 import { useToast } from "../components/Feedback";
-import type { ComputedField, EntityType, TemplatePages } from "../types";
+import type { ComputedField, EntityType, TemplatePages, TurnRule } from "../types";
 
 /** Заготовка для нового типа: показывает и вложенность, и списки. */
 const SAMPLE_SCHEMA: Record<string, unknown> = {
@@ -33,11 +34,12 @@ const DEFAULT_PAGE: Page[] = [{ text: `**{{ label }}**
 /** Типы связей для меню вставки: у типа нет своих связей, показываем частые. */
 const RELATION_HINTS = ["союзник", "война", "состав"];
 
-type Tab = "pages" | "computed" | "schema";
+type Tab = "pages" | "computed" | "turn" | "schema";
 
 const TAB_LABEL: Record<Tab, string> = {
   pages: "Описание",
   computed: "Формулы",
+  turn: "Ход",
   schema: "Атрибуты",
 };
 
@@ -58,6 +60,7 @@ export function EntityTypeEditorPage() {
   const [slug, setSlug] = useState("");
   const [pages, setPages] = useState<Page[]>(DEFAULT_PAGE);
   const [computed, setComputed] = useState<ComputedField[]>([]);
+  const [turnRules, setTurnRules] = useState<TurnRule[]>([]);
   // Через него редактор формул вставляет {{ выч.путь }} в страницу описания.
   const insertRef = useRef<((text: string) => void) | null>(null);
   // Структура атрибутов: и заготовка для новых сущностей, и данные предпросмотра.
@@ -83,6 +86,7 @@ export function EntityTypeEditorPage() {
       ),
     );
     setComputed(existing.computed ?? []);
+    setTurnRules(existing.turn_rules ?? []);
     // У типов, созданных до появления структуры, она пустая — показываем заготовку.
     const savedSchema = existing.attributes_schema ?? {};
     setSchema(Object.keys(savedSchema).length > 0 ? savedSchema : SAMPLE_SCHEMA);
@@ -125,6 +129,7 @@ export function EntityTypeEditorPage() {
       page_colors: pageColors(pages),
       attributes_schema: schema,
       computed,
+      turn_rules: turnRules,
     };
     try {
       if (existing) {
@@ -187,6 +192,11 @@ export function EntityTypeEditorPage() {
                     {calcErrors > 0 ? `⚠ ${calcErrors}` : computed.length}
                   </span>
                 )}
+                {key === "turn" && turnRules.length > 0 && (
+                  <span className="calc-badge" style={{ marginLeft: 6 }}>
+                    {turnRules.length}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -235,7 +245,15 @@ export function EntityTypeEditorPage() {
                 <code>сумма(гигаструктуры, "мощь")</code>. Путь с точками собирается в дерево — в
                 шаблоне это <code>{"{{ выч.бюджет.деньги }}"}</code>, а вся ветка сразу —{" "}
                 <code>{"{{ выч.бюджет | поля }}"}</code>. Одна формула может ссылаться на другую, а
-                отдельная сущность — переопределить любую из них у себя.
+                отдельная сущность — переопределить любую из них у себя. Есть ветвление{" "}
+                <code>если(условие, то, иначе)</code> со сравнениями (<code>&gt;</code>,{" "}
+                <code>&lt;</code>, <code>==</code>) и связками <code>and</code>/<code>or</code>/
+                <code>not</code>, ограничитель <code>в_пределах(x, 0, 100)</code> и счёт по
+                связям: <code>количество(связи.союзник)</code>,{" "}
+                <code>сумма(связи.союзник, "выч.мощь")</code>,{" "}
+                <code>среднее</code>/<code>максимум</code>/<code>минимум</code>. Через связи
+                видны показатели соседа, но не его собственные связевые расчёты — обход графа
+                на один шаг, чтобы игра не зациклилась.
               </Hint>
               <ComputedEditor
                 fields={computed}
@@ -247,6 +265,28 @@ export function EntityTypeEditorPage() {
                   insertRef.current?.(text);
                   toast.ok("Вставлено в описание");
                 }}
+              />
+            </div>
+          )}
+
+          {tab === "turn" && (
+            <div className="stack tight">
+              <Hint id="type-turn">
+                Правило меняет атрибут <b>в конце хода</b>: слева — что изменится, справа —
+                чему станет равно. Классика:{" "}
+                <code>экономика.деньги.запас</code> ←{" "}
+                <code>экономика.деньги.запас - выч.деньги</code>. Доступны атрибуты, формулы
+                (<code>выч.*</code>) и связи (<code>сумма(связи.союзник, "выч.мощь")</code>).
+                Чтобы запас не ушёл в минус — <code>в_пределах(…, 0, 999999)</code>, а для
+                ветвлений есть <code>если(условие, то, иначе)</code>. Ход завершается кнопкой
+                на экране проекта: сначала показывается «было → станет» по всем сущностям, и
+                только потом изменения применяются — все одновременно.
+              </Hint>
+              <TurnRulesEditor
+                rules={turnRules}
+                onChange={setTurnRules}
+                scope="type"
+                paths={attrPaths(schema)}
               />
             </div>
           )}

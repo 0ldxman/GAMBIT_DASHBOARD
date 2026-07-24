@@ -57,6 +57,8 @@ class Project(Base):
     media_url: Mapped[str] = mapped_column(String(500), default="")
     media_filename: Mapped[str] = mapped_column(String(200), default="")
     media_content_type: Mapped[str] = mapped_column(String(120), default="")
+    # Текущий ход игры: растёт при «Завершить ход», падает при откате.
+    turn_number: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     channels: Mapped[list[ProjectChannel]] = relationship(
@@ -149,6 +151,10 @@ class EntityType(Base):
     # Список, а не объект: он хранит порядок вывода и подписи, а дерево по dot-path
     # собирается при рендере (app/computed.py).
     computed: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Автоизменения в конце хода: [{"path": "экономика.деньги.запас",
+    # "label": "Казна", "expr": "экономика.деньги.запас - выч.деньги"}].
+    # Тот же формат, что computed, но применяется к атрибутам при завершении хода.
+    turn_rules: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
 
     project: Mapped[Project] = relationship(back_populates="entity_types")
     entities: Mapped[list[Entity]] = relationship(back_populates="type")
@@ -178,6 +184,9 @@ class Entity(Base):
     # описания они не замещают типовые, а ДОПОЛНЯЮТ их: совпадение путей
     # переопределяет одну формулу, остальные продолжают работать (app/computed.py).
     computed: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Собственные правила хода: дополняют правила типа, совпадение путей —
+    # переопределяет (та же логика merge, что у computed).
+    turn_rules: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
 
     project: Mapped[Project] = relationship(back_populates="entities")
     type: Mapped[Optional[EntityType]] = relationship(back_populates="entities")
@@ -474,6 +483,25 @@ class DirectMessage(Base):
     color: Mapped[str] = mapped_column(String(7), default="")
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TurnSnapshot(Base):
+    """Снимок атрибутов всех сущностей перед завершением хода.
+
+    Нужен для отката: «Завершить ход» необратимо меняет данные всех сущностей,
+    поэтому перед применением сохраняется состояние, к которому можно вернуться
+    одной кнопкой. Храним минимум последний снимок; откат берёт самый свежий.
+    """
+
+    __tablename__ = "turn_snapshot"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("project.id", ondelete="CASCADE"))
+    # Номер хода, ПОСЛЕ которого сделан снимок (то есть состояние этого хода).
+    turn_number: Mapped[int] = mapped_column(default=0)
+    # {entity_id: attributes} на момент до применения правил.
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

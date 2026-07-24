@@ -16,6 +16,7 @@ from app.computed import compute
 from app.computed import merge
 from app.computed import template_extra
 from app.database import get_db
+from app.descriptions import entity_extras
 from app.expressions import ExpressionError
 from app.expressions import evaluate
 from app.models import Entity
@@ -79,7 +80,7 @@ def _list_conflict(attributes: dict, path: str) -> str | None:
 
 
 def run_edit_ops(
-    attributes: dict, fields: list, ops: list, attrs: dict
+    attributes: dict, fields: list, ops: list, attrs: dict, extras: dict | None = None
 ) -> tuple[dict, dict[str, str]]:
     """Прогнать операции над копией атрибутов.
 
@@ -121,9 +122,11 @@ def run_edit_ops(
             current = apply_attribute_patch(current, {path: updated})
         elif mode == "expr":
             # Формулы доступны как «выч.бюджет.итого» — типовые вместе с
-            # собственными формулами сущности.
-            tree, _ = compute(fields, current)
+            # собственными формулами сущности; связи (`связи.союзник`) — из extras.
+            tree, _ = compute(fields, current, extras)
             context = {**current, **template_extra(tree, current)}
+            for key, value in (extras or {}).items():
+                context.setdefault(key, value)
             try:
                 value = evaluate(str(op.get("value") or ""), context)
             except ExpressionError as exc:
@@ -138,8 +141,10 @@ def run_edit_ops(
     return current, errors
 
 
-async def _edit_target(project_id: int, entity_id: int, db: AsyncSession) -> tuple[Entity, list]:
-    """Сущность правки и действующий для неё список формул."""
+async def _edit_target(
+    project_id: int, entity_id: int, db: AsyncSession
+) -> tuple[Entity, list, dict]:
+    """Сущность правки, её список формул и связи (для `выч` и `связи.*` в expr)."""
     entity = await db.get(Entity, entity_id)
     if entity is None or entity.project_id != project_id:
         raise HTTPException(
@@ -147,7 +152,8 @@ async def _edit_target(project_id: int, entity_id: int, db: AsyncSession) -> tup
             detail=f"Сущность {entity_id} не принадлежит проекту",
         )
     entity_type = await db.get(EntityType, entity.type_id) if entity.type_id is not None else None
-    return entity, merge(entity_type.computed if entity_type else [], entity.computed)
+    fields = merge(entity_type.computed if entity_type else [], entity.computed)
+    return entity, fields, await entity_extras(entity, db)
 
 
 async def apply_entity_edits(project_id: int, edits: list, db: AsyncSession) -> None:
@@ -168,8 +174,8 @@ async def apply_entity_edits(project_id: int, edits: list, db: AsyncSession) -> 
         if not ops and not attrs:
             continue
 
-        entity, fields = await _edit_target(project_id, entity_id, db)
-        current, errors = run_edit_ops(entity.attributes, fields, ops, attrs)
+        entity, fields, extras = await _edit_target(project_id, entity_id, db)
+        current, errors = run_edit_ops(entity.attributes, fields, ops, attrs, extras)
         if errors:
             path, message = next(iter(errors.items()))
             raise HTTPException(
@@ -208,9 +214,9 @@ async def preview_edits(
         ops = [op.model_dump() for op in edit.ops]
         if not ops and not edit.attributes:
             continue
-        entity, fields = await _edit_target(project_id, edit.entity_id, db)
+        entity, fields, extras = await _edit_target(project_id, edit.entity_id, db)
         before = dict(entity.attributes or {})
-        after, errors = run_edit_ops(before, fields, ops, edit.attributes)
+        after, errors = run_edit_ops(before, fields, ops, edit.attributes, extras)
 
         rows: list[EditPreviewRow] = []
         for op in ops:

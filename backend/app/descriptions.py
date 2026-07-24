@@ -62,10 +62,17 @@ async def entity_fields(entity: Entity, db: AsyncSession) -> list[dict[str, str]
 
 
 async def entity_computed(
-    entity: Entity, db: AsyncSession
+    entity: Entity, db: AsyncSession, extras: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], list[ComputedValue]]:
-    """Посчитать формулы сущности на её же атрибутах."""
-    return compute(await entity_fields(entity, db), entity.attributes)
+    """Посчитать формулы сущности на её же атрибутах.
+
+    `extras` (связи сущности) даёт формулам доступ к соседям. Если не передан —
+    добываем сами; вызовы, которым связи и так нужны (рендер страниц), считают
+    extras один раз и передают сюда, чтобы не дёргать БД дважды.
+    """
+    if extras is None:
+        extras = await entity_extras(entity, db)
+    return compute(await entity_fields(entity, db), entity.attributes, extras)
 
 
 def _related_card(entity: Entity, entity_type: EntityType | None) -> dict[str, Any]:
@@ -164,7 +171,7 @@ async def entity_extras(entity: Entity, db: AsyncSession) -> dict[str, Any]:
 
     parents: list[dict[str, Any]] = []
     children: list[dict[str, Any]] = []
-    by_type: dict[str, list[dict[str, Any]]] = {}
+    by_type: dict[str, list[dict[str, Any]]] = RelationMap()
     for relation in relations:
         parent_side = relation.parent_id == entity.id
         other_id = relation.child_id if parent_side else relation.parent_id
@@ -205,6 +212,22 @@ async def entity_extras(entity: Entity, db: AsyncSession) -> dict[str, Any]:
     }
 
 
+class RelationMap(dict):
+    """Связи по типу: обращение к отсутствующему типу даёт пустой список.
+
+    У страны без союзников `связи.союзник` должно быть `[]`, а не ошибкой «нет
+    атрибута», — иначе `количество(связи.союзник)` падал бы вместо нуля. Ключей
+    у словаря по-прежнему ровно столько, сколько реальных типов связей (итерация
+    и `.items()` не меняются), но чтение по любому типу безопасно.
+    """
+
+    def __contains__(self, key: object) -> bool:  # noqa: D401 — см. класс
+        return True
+
+    def __missing__(self, key: object) -> list[Any]:
+        return []
+
+
 # Имя, под которым особые переменные всегда доступны целиком.
 EXTRAS_NAMESPACE = "сущность"
 
@@ -233,7 +256,7 @@ SAMPLE_EXTRAS: dict[str, Any] = {
         _sample_side("Организация", "Блок", "член организации", "родитель", основана=1949)
     ],
     "дети": [_sample_side("Провинция", "Регион", "состав", "дочерняя", население=120000)],
-    "связи": {
+    "связи": RelationMap({
         "союзник": [
             _sample_side("Соседняя страна", "Страна", "союзник", "взаимная", столица="Город")
         ],
@@ -250,7 +273,7 @@ SAMPLE_EXTRAS: dict[str, Any] = {
                 описание="что это и зачем",
             )
         ],
-    },
+    }),
     "тип": "Тип сущности",
 }
 
@@ -277,8 +300,9 @@ def build_extras(
 async def render_entity_pages(entity: Entity, db: AsyncSession) -> list[str]:
     """Готовые тексты страниц: в Discord игрок листает их кнопками."""
     pages = await description_pages(entity, db)
-    tree, _ = await entity_computed(entity, db)
-    extra = build_extras(tree, entity.attributes, await entity_extras(entity, db))
+    extras = await entity_extras(entity, db)
+    tree, _ = await entity_computed(entity, db, extras)
+    extra = build_extras(tree, entity.attributes, extras)
     return render_pages(pages, entity.attributes, label=entity.label, extra=extra)
 
 

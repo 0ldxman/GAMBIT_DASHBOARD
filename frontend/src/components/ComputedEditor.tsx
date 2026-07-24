@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ALL_LEVELS, DepthPicker, GroupBox, groupByPath, pathTail } from "./grouping";
 import type { PathGroup } from "./grouping";
-import { useLocalNumber } from "../hooks";
-import type { ComputedField, ComputedValue } from "../types";
+import { useDebounced, useLocalNumber } from "../hooks";
+import type { ComputedField, ComputedValue, ExprEval, ExprEvalRef } from "../types";
 
 /** Формула вместе со своим местом в списке — индекс нужен для правки. */
 interface Placed {
@@ -14,7 +14,7 @@ interface Placed {
 const hasNesting = (paths: string[]) => paths.some((path) => path.includes("."));
 
 /** Готовое значение или ошибка — одинаково в редакторе и в списке. */
-function Value({ value }: { value?: ComputedValue }) {
+function Value({ value, refs }: { value?: ComputedValue; refs?: ExprEvalRef[] }) {
   if (value?.error) {
     return (
       <span className="error" title={value.error}>
@@ -22,7 +22,82 @@ function Value({ value }: { value?: ComputedValue }) {
       </span>
     );
   }
-  return <span className="calc-value">{value?.text || "—"}</span>;
+  return (
+    <span
+      className="calc-value"
+      title={refs?.length ? refs.map((r) => `${r.path} = ${r.text}`).join("\n") : undefined}
+    >
+      {value?.text || "—"}
+    </span>
+  );
+}
+
+/**
+ * Значения путей, на которые ссылается формула.
+ *
+ * Само число формулы приходит из предпросмотра страниц, а вот ЧТО в неё вошло —
+ * нет. Куратору, который не программирует, ошибка «не число» непонятна, пока не
+ * видно, чему равен каждый вход.
+ */
+function useExprRefs(expr: string, evalExpr?: (expr: string) => Promise<ExprEval>) {
+  const debounced = useDebounced(expr, 500);
+  const [refs, setRefs] = useState<ExprEvalRef[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!evalExpr || !debounced.trim()) {
+      setRefs([]);
+      return;
+    }
+    evalExpr(debounced)
+      .then((r) => !cancelled && setRefs(r.refs))
+      .catch(() => !cancelled && setRefs([]));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debounced, !!evalExpr]);
+
+  return refs;
+}
+
+/** Поле выражения с результатом и значениями входов под ним. */
+function ExprRow({
+  expr,
+  value,
+  evalExpr,
+  onChange,
+  onFocus,
+}: {
+  expr: string;
+  value?: ComputedValue;
+  evalExpr?: (expr: string) => Promise<ExprEval>;
+  onChange: (expr: string) => void;
+  onFocus: () => void;
+}) {
+  const refs = useExprRefs(expr, evalExpr);
+  return (
+    <>
+      <div className="row top" style={{ gap: "var(--s2)" }}>
+        <textarea
+          className="grow mono"
+          value={expr}
+          placeholder="казна.прирост - казна.расход"
+          onFocus={onFocus}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ minHeight: 46 }}
+        />
+        <div style={{ flex: "0 0 170px", textAlign: "right", paddingTop: 6 }}>
+          <Value value={value} refs={refs} />
+        </div>
+      </div>
+      {refs.length > 0 && (
+        <span className="muted" style={{ fontSize: "var(--fs-micro)" }}>
+          {refs.map((r) => `${r.path} = ${r.text}`).join(" · ")}
+        </span>
+      )}
+    </>
+  );
 }
 
 /**
@@ -45,6 +120,7 @@ export function ComputedEditor({
   values,
   paths,
   onInsert,
+  evalExpr,
   scope = "entity",
 }: {
   /** Собственные формулы: их и правит этот редактор. */
@@ -59,6 +135,8 @@ export function ComputedEditor({
   paths: string[];
   /** Вставить `{{ выч.путь }}` в страницу описания. */
   onInsert?: (snippet: string) => void;
+  /** Значения входов формулы; нет сущности (редактор типа) — нет и предпросмотра. */
+  evalExpr?: (expr: string) => Promise<ExprEval>;
   /** Разделяет память свёрнутых групп и глубины: у типа и у сущности она своя. */
   scope?: string;
 }) {
@@ -163,19 +241,13 @@ export function ComputedEditor({
             </button>
           </div>
         </div>
-        <div className="row top" style={{ gap: "var(--s2)" }}>
-          <textarea
-            className="grow mono"
-            value={field.expr}
-            placeholder="казна.прирост - казна.расход"
-            onFocus={() => setActive(index)}
-            onChange={(e) => patch(index, { expr: e.target.value })}
-            style={{ minHeight: 46 }}
-          />
-          <div style={{ flex: "0 0 170px", textAlign: "right", paddingTop: 6 }}>
-            <Value value={byPath.get(field.path)} />
-          </div>
-        </div>
+        <ExprRow
+          expr={field.expr}
+          value={byPath.get(field.path)}
+          evalExpr={evalExpr}
+          onFocus={() => setActive(index)}
+          onChange={(expr) => patch(index, { expr })}
+        />
         <div className="row" style={{ gap: "var(--s2)" }}>
           {overrides && (
             <span className="calc-badge" title={`Вместо формулы типа «${inheritedFrom}»`}>

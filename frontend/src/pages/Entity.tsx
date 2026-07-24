@@ -8,6 +8,7 @@ import { PagesEditor, pageColors, pageTexts, toPages } from "../components/Pages
 import type { Page } from "../components/PagesEditor";
 import { buildSuggestions } from "../components/suggestions";
 import { ComputedEditor } from "../components/ComputedEditor";
+import { TurnRulesEditor } from "../components/TurnRulesEditor";
 import { EntityCard } from "../components/EntityCard";
 import { Section } from "../components/Section";
 import { Hint } from "../components/Hint";
@@ -23,6 +24,7 @@ import type {
   Relation,
   SystemInfo,
   TemplatePages,
+  TurnRule,
 } from "../types";
 import { MembersSection } from "./entity/MembersSection";
 import { RelationsSection } from "./entity/RelationsSection";
@@ -157,6 +159,7 @@ export function EntityPage() {
   const [attrVersion, setAttrVersion] = useState(0);
   const [attrError, setAttrError] = useState<string | null>(null);
   const [computed, setComputed] = useState<ComputedField[]>([]);
+  const [turnRules, setTurnRules] = useState<TurnRule[]>([]);
   const [preview, setPreview] = useState<TemplatePages | null>(null);
   const [custom, setCustom] = useState(false);
   const [customPages, setCustomPages] = useState<Page[]>([]);
@@ -168,6 +171,7 @@ export function EntityPage() {
     setTypeId(data.type_id);
     setAttributes(data.attributes);
     setComputed(data.computed ?? []);
+    setTurnRules(data.turn_rules ?? []);
     setCustom(data.use_custom_description);
     setCustomPages(toPages(data.description_pages ?? [], data.page_colors ?? []));
     setAttrVersion((v) => v + 1);
@@ -230,6 +234,7 @@ export function EntityPage() {
       description_pages: pageTexts(customPages),
       page_colors: pageColors(customPages),
       computed,
+      turn_rules: turnRules,
     },
     entity.data,
     {
@@ -241,6 +246,7 @@ export function EntityPage() {
       description_pages: "описание",
       page_colors: "описание",
       computed: "формулы",
+      turn_rules: "правила хода",
     },
   );
 
@@ -263,6 +269,7 @@ export function EntityPage() {
         description_pages: pageTexts(customPages),
         page_colors: pageColors(customPages),
         computed,
+        turn_rules: turnRules,
       });
       toast.ok("Сохранено");
       entity.reload();
@@ -276,6 +283,11 @@ export function EntityPage() {
   const calcErrors = (preview?.computed ?? []).filter((v) => v.error).length;
   const ownCount = computed.length;
   const typeCount = type?.computed?.length ?? 0;
+  const ownTurnCount = turnRules.length;
+  // Типовые правила, которые сущность не переопределила своими.
+  const turnCount = (type?.turn_rules ?? []).filter(
+    (rule) => !turnRules.some((own) => own.path === rule.path),
+  ).length;
 
   if (entity.loading) return <p className="muted">Загрузка…</p>;
   if (entity.error) return <p className="error">{entity.error}</p>;
@@ -402,7 +414,12 @@ export function EntityPage() {
                   Формулы считаются по атрибутам выше — прямо сейчас, до сохранения. Типовые
                   правятся в типе сущности, но любую можно переопределить здесь, а можно завести
                   свою: <code>сумма(корабли, "тоннаж")</code>. В шаблоне доступны как{" "}
-                  <code>{"{{ выч.бюджет.деньги }}"}</code>.
+                  <code>{"{{ выч.бюджет.деньги }}"}</code>. Кроме арифметики есть ветвление —{" "}
+                  <code>если(стабильность &gt; 50, база, база / 2)</code>, ограничитель{" "}
+                  <code>в_пределах(x, 0, 100)</code> и счёт по связям:{" "}
+                  <code>количество(связи.союзник)</code>,{" "}
+                  <code>сумма(связи.союзник, "выч.мощь")</code>. Под выражением видно, чему
+                  равен каждый его вход.
                 </Hint>
                 <ComputedEditor
                   fields={computed}
@@ -411,6 +428,38 @@ export function EntityPage() {
                   inheritedFrom={type?.label ?? ""}
                   values={preview?.computed}
                   paths={attrPaths(attributes)}
+                  evalExpr={(expr) => api.evalExpr(pid, eid, expr)}
+                />
+              </Section>
+
+              <Section
+                id="entity-turn"
+                title="Автоизменения в ход"
+                summary={
+                  turnCount + ownTurnCount === 0
+                    ? "нет"
+                    : `${turnCount + ownTurnCount}${
+                        ownTurnCount > 0 ? ` (своих ${ownTurnCount})` : " из типа"
+                      }`
+                }
+              >
+                <Hint id="entity-turn">
+                  Правило меняет атрибут <b>в конце хода</b>: слева — что изменится, справа —
+                  чему станет равно (<code>экономика.деньги.запас</code> ←{" "}
+                  <code>экономика.деньги.запас - выч.деньги</code>). Справа от выражения
+                  видно, чем оно станет на текущих данных. Доступны атрибуты, формулы и связи
+                  (<code>сумма(связи.союзник, "выч.мощь")</code>), а также{" "}
+                  <code>если(условие, то, иначе)</code> и <code>в_пределах(…, 0, 999999)</code>.
+                  Ход завершается на экране проекта — сразу у всех сущностей и по состоянию на
+                  начало хода.
+                </Hint>
+                <TurnRulesEditor
+                  rules={turnRules}
+                  onChange={setTurnRules}
+                  inherited={type?.turn_rules ?? []}
+                  inheritedFrom={type?.label ?? ""}
+                  paths={attrPaths(attributes)}
+                  evalExpr={(expr) => api.evalExpr(pid, eid, expr)}
                 />
               </Section>
             </>

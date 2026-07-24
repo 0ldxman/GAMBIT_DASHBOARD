@@ -6,6 +6,7 @@ import type { AppNotification, DiscordGuild, Project, Registration } from "../ty
 import { EntitiesTab } from "./project/EntitiesTab";
 import { EntityTypesTab } from "./project/EntityTypesTab";
 import { RelationsTab } from "./project/RelationsTab";
+import { TurnTab } from "./project/TurnTab";
 import { ChannelsTab } from "./project/ChannelsTab";
 import { PostsTab } from "./project/PostsTab";
 import { FormsTab } from "./project/FormsTab";
@@ -19,7 +20,7 @@ import { Section } from "../components/Section";
  * (верды, сущности, типы), справа — настройка игры. «Заявки» и «Уведомления»
  * из этого ряда убраны: это входящие, им место у счётчика справа.
  */
-const CONTENT = ["posts", "entities", "types", "relations"] as const;
+const CONTENT = ["posts", "entities", "types", "relations", "turn"] as const;
 const CONFIG = ["channels", "forms", "settings"] as const;
 const TABS = [...CONTENT, ...CONFIG, "inbox"] as const;
 
@@ -30,6 +31,7 @@ const LABELS: Record<Tab, string> = {
   entities: "Сущности",
   types: "Типы",
   relations: "Связи",
+  turn: "Ход",
   channels: "Каналы",
   forms: "Формы",
   settings: "Настройки",
@@ -115,6 +117,7 @@ export function ProjectPage() {
       {tab === "entities" && <EntitiesTab projectId={pid} />}
       {tab === "types" && <EntityTypesTab projectId={pid} />}
       {tab === "relations" && <RelationsTab projectId={pid} />}
+      {tab === "turn" && <TurnTab projectId={pid} />}
       {tab === "channels" && <ChannelsTab projectId={pid} />}
       {tab === "forms" && <FormsTab projectId={pid} />}
       {tab === "settings" && project.data && (

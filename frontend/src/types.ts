@@ -10,6 +10,8 @@ export interface Project {
   media_url: string;
   media_filename: string;
   media_content_type: string;
+  /** Текущий ход: растёт при «Завершить ход», падает при откате. */
+  turn_number: number;
   created_at: string;
 }
 
@@ -64,6 +66,8 @@ export interface EntityType {
   attributes_schema: Record<string, unknown>;
   /** Формулы от атрибутов: в шаблоне доступны как {{ выч.путь }}. */
   computed: ComputedField[];
+  /** Автоизменения атрибутов при завершении хода. */
+  turn_rules: TurnRule[];
 }
 
 /** Вычисляемое поле типа: путь в дереве формул, подпись и выражение. */
@@ -71,6 +75,44 @@ export interface ComputedField {
   path: string;
   label: string;
   expr: string;
+}
+
+/**
+ * Правило хода: атрибут ← выражение, применяется при завершении хода.
+ *
+ * Форма совпадает с формулой, но смысл иной: формула считается на лету и
+ * ничего не меняет, а правило один раз записывает результат в атрибут.
+ */
+export interface TurnRule {
+  path: string;
+  label: string;
+  expr: string;
+}
+
+/** Состояние хода проекта для панели «Ход». */
+export interface TurnState {
+  turn_number: number;
+  can_rollback: boolean;
+}
+
+/** Предпросмотр завершения хода по всем сущностям проекта. */
+export interface TurnPreview {
+  turn_number: number;
+  entities: EditPreview[];
+  has_errors: boolean;
+}
+
+/** Значение пути, на который ссылается выражение — вход формулы. */
+export interface ExprEvalRef {
+  path: string;
+  text: string;
+}
+
+/** Результат живого предпросмотра выражения на данных сущности. */
+export interface ExprEval {
+  value: string | null;
+  error: string | null;
+  refs: ExprEvalRef[];
 }
 
 /** Откуда формула: от типа, своя у сущности или своя вместо типовой. */
@@ -197,6 +239,8 @@ export interface Entity {
   page_colors: string[];
   /** Свои формулы: дополняют формулы типа, совпадение путей — переопределяет. */
   computed: ComputedField[];
+  /** Свои правила хода: дополняют правила типа тем же порядком слияния. */
+  turn_rules: TurnRule[];
   members: Member[];
 }
 

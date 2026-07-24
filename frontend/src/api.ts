@@ -16,6 +16,7 @@ import type {
   EntityLink,
   EntityPingCount,
   EntityType,
+  ExprEval,
   GuildPlayer,
   Member,
   Relation,
@@ -30,6 +31,8 @@ import type {
   SystemInfo,
   TemplateField,
   TemplatePages,
+  TurnPreview,
+  TurnState,
 } from "./types";
 
 const TOKEN_KEY = "gambit_token";
@@ -197,6 +200,21 @@ export const api = {
     request<void>("DELETE", `/projects/${pid}/entities/${eid}`),
   renderEntity: (pid: number, eid: number) =>
     request<TemplatePages>("GET", `/projects/${pid}/entities/${eid}/render`),
+  /** Посчитать выражение на данных сущности — живой предпросмотр формулы. */
+  evalExpr: (pid: number, eid: number, expr: string) =>
+    request<ExprEval>("POST", `/projects/${pid}/entities/${eid}/eval`, { expr }),
+
+  // ход: автоизменения атрибутов в конце хода
+  turnState: (pid: number) =>
+    request<TurnState>("GET", `/projects/${pid}/turn/state`),
+  turnPreview: (pid: number) =>
+    request<TurnPreview>("POST", `/projects/${pid}/turn/preview`),
+  turnEnd: (pid: number, expectedTurn: number) =>
+    request<TurnState>("POST", `/projects/${pid}/turn/end`, {
+      expected_turn: expectedTurn,
+    }),
+  turnRollback: (pid: number) =>
+    request<TurnState>("POST", `/projects/${pid}/turn/rollback`),
 
   // все связи проекта разом — для экрана связей и графа
   listProjectRelations: (pid: number) =>

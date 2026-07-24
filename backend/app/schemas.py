@@ -64,6 +64,8 @@ class ProjectOut(ORMModel):
     media_url: str
     media_filename: str
     media_content_type: str
+    # Текущий номер хода: растёт при «Завершить ход», падает при откате.
+    turn_number: int = 0
     created_at: datetime
 
 
@@ -135,6 +137,39 @@ class ComputedValueOut(BaseModel):
     source: str = ""
 
 
+class TurnRuleIn(BaseModel):
+    """Правило автоизменения в конце хода: атрибут ← выражение.
+
+    `path` — куда записать (dot-path атрибута, напр. «экономика.деньги.запас»),
+    `expr` — что записать (напр. «экономика.деньги.запас - выч.деньги»).
+    Форма совпадает с формулой, но смысл иной: формула считается на лету, а
+    правило хода один раз применяется к атрибутам при завершении хода.
+    """
+
+    path: str
+    label: str = ""
+    expr: str
+
+
+class ExprEvalRequest(BaseModel):
+    """Проверить одно выражение на данных конкретной сущности (живой предпросмотр)."""
+
+    expr: str
+
+
+class ExprEvalRef(BaseModel):
+    """Значение пути, на который ссылается выражение — чтобы куратор видел вход."""
+
+    path: str
+    text: str
+
+
+class ExprEvalOut(BaseModel):
+    value: Optional[str] = None
+    error: Optional[str] = None
+    refs: list[ExprEvalRef] = Field(default_factory=list)
+
+
 class EntityTypeBase(BaseModel):
     slug: str
     label: str
@@ -148,6 +183,8 @@ class EntityTypeBase(BaseModel):
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
     # Формулы от атрибутов, доступные в шаблоне как {{ выч.путь }}.
     computed: list[ComputedFieldIn] = Field(default_factory=list)
+    # Автоизменения атрибутов при завершении хода.
+    turn_rules: list[TurnRuleIn] = Field(default_factory=list)
 
 
 class EntityTypeCreate(EntityTypeBase):
@@ -162,6 +199,7 @@ class EntityTypeUpdate(BaseModel):
     page_colors: Optional[list[str]] = None
     attributes_schema: Optional[dict[str, Any]] = None
     computed: Optional[list[ComputedFieldIn]] = None
+    turn_rules: Optional[list[TurnRuleIn]] = None
 
 
 class EntityTypeOut(ORMModel):
@@ -174,6 +212,7 @@ class EntityTypeOut(ORMModel):
     page_colors: list[str] = Field(default_factory=list)
     attributes_schema: dict[str, Any] = Field(default_factory=dict)
     computed: list[ComputedFieldIn] = Field(default_factory=list)
+    turn_rules: list[TurnRuleIn] = Field(default_factory=list)
 
 
 # ---------- entity ----------
@@ -188,6 +227,8 @@ class EntityBase(BaseModel):
     page_colors: list[str] = Field(default_factory=list)
     # Собственные формулы: дополняют формулы типа, совпадение путей — переопределяет.
     computed: list[ComputedFieldIn] = Field(default_factory=list)
+    # Собственные правила хода: дополняют правила типа, совпадение путей — переопределяет.
+    turn_rules: list[TurnRuleIn] = Field(default_factory=list)
 
 
 class EntityCreate(EntityBase):
@@ -203,6 +244,7 @@ class EntityUpdate(BaseModel):
     description_pages: Optional[list[str]] = None
     page_colors: Optional[list[str]] = None
     computed: Optional[list[ComputedFieldIn]] = None
+    turn_rules: Optional[list[TurnRuleIn]] = None
 
 
 # ---------- участники сущности ----------
@@ -284,6 +326,7 @@ class EntityOut(ORMModel):
     description_pages: list[str] = Field(default_factory=list)
     page_colors: list[str] = Field(default_factory=list)
     computed: list[ComputedFieldIn] = Field(default_factory=list)
+    turn_rules: list[TurnRuleIn] = Field(default_factory=list)
     members: list[MemberOut] = Field(default_factory=list)
 
 
@@ -432,6 +475,34 @@ class EditPreviewOut(BaseModel):
     entity_id: int
     label: str
     rows: list[EditPreviewRow] = Field(default_factory=list)
+
+
+# ---------- ход ----------
+class TurnStateOut(BaseModel):
+    """Состояние хода проекта для панели «Ход»."""
+
+    turn_number: int
+    # Есть ли снимок предыдущего хода, к которому можно откатиться.
+    can_rollback: bool = False
+
+
+class TurnPreviewOut(BaseModel):
+    """Что автоизменения сделают со всеми сущностями при завершении хода."""
+
+    turn_number: int
+    entities: list[EditPreviewOut] = Field(default_factory=list)
+    # Есть ли хоть одна ошибка правила — тогда «Завершить ход» откажет.
+    has_errors: bool = False
+
+
+class TurnEndRequest(BaseModel):
+    """Завершение хода. `expected_turn` — защита от повторного клика.
+
+    Если номер хода на сервере уже другой (ход завершил кто-то ещё), запрос
+    отклоняется, а не начисляет доход второй раз.
+    """
+
+    expected_turn: int
 
 
 # ---------- post (верд) ----------

@@ -177,9 +177,15 @@ def _resolve_all(
     fields: list[dict[str, str]],
     attributes: dict[str, Any],
     *,
+    extras: dict[str, Any] | None = None,
     check_only: bool = False,
 ) -> tuple[dict[str, float | int], dict[str, str]]:
-    """Вычислить все поля. Возвращает (значения, ошибки) по путям."""
+    """Вычислить все поля. Возвращает (значения, ошибки) по путям.
+
+    `extras` — связи сущности (`связи`, `родители`, `дети`), чтобы формула могла
+    считать по соседям: `сумма(связи.союзник, "выч.мощь")`. Соседи в extras уже
+    посчитаны БЕЗ своих связевых формул (барьер «один шаг», см. descriptions).
+    """
     by_path = {field["path"]: field for field in fields}
     values: dict[str, float | int] = {}
     errors: dict[str, str] = {}
@@ -187,8 +193,11 @@ def _resolve_all(
     def context() -> dict[str, Any]:
         tree = _build_tree(values, by_path)
         ctx: dict[str, Any] = {**attributes, NAMESPACE: tree}
+        for key, value in (extras or {}).items():
+            # Настоящий атрибут важнее связи с тем же именем.
+            ctx.setdefault(key, value)
         for root, node in tree.items():
-            # Короткая запись без префикса — только если корень не занят атрибутом.
+            # Короткая запись без префикса — только если корень не занят.
             ctx.setdefault(root, node)
         return ctx
 
@@ -250,17 +259,18 @@ def _build_tree(
 
 
 def compute(
-    raw: Any, attributes: dict[str, Any] | None
+    raw: Any, attributes: dict[str, Any] | None, extras: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], list[ComputedValue]]:
     """Посчитать формулы типа для конкретных атрибутов.
 
     Возвращает дерево для шаблона и плоский список значений для дашборда.
+    `extras` (необязательно) — связи сущности для формул по соседям.
     """
     fields = normalize(raw)
     if not fields:
         return {}, []
     attributes = attributes or {}
-    values, errors = _resolve_all(fields, attributes)
+    values, errors = _resolve_all(fields, attributes, extras=extras)
     by_path = {field["path"]: field for field in fields}
     tree = _build_tree(values, by_path)
 
